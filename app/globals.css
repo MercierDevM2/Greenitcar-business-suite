@@ -26,3 +26,16 @@ body {
 a {
   text-decoration: none;
 }
+
+/* Select and option styling for light/dark mode */
+select,
+option {
+  @apply bg-slate-100 text-slate-900;
+}
+
+@media (prefers-color-scheme: dark) {
+  select,
+  option {
+    @apply bg-slate-900 text-white;
+  }
+}
