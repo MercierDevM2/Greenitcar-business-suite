@@ -35,13 +35,29 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       if (data?.services_choisis) {
         setActiveServices(data.services_choisis);
         
-        // Sécurité 2 : Bloquer l'accès manuel par URL si le service n'est pas acheté/choisi
+        // Sécurité 2 : Bloquer l'accès manuel par URL si le service n'est pas choisi
         const currentModule = pathname.split("/")[2]; // récupère 'school', 'stock', etc.
-        if (currentModule && currentModule !== "notifications" && currentModule !== "profil" && currentModule !== "parametres") {
-          // On vérifie les équivalences d'ID (ex: /dashboard/factures -> 'facture')
-          const mappedId = currentModule.replace(/s$/, ""); // gère le pluriel basique
-          if (!data.services_choisis.includes(mappedId)) {
-            router.push("/dashboard"); // Redirection vers l'accueil si non autorisé
+        
+        const routesAutoriseesSansModule = ["notifications", "profil", "parametres", undefined];
+
+        if (!routesAutoriseesSansModule.includes(currentModule)) {
+          // Mapping strict entre le sous-dossier URL et l'ID du service choisi
+          const routeToModuleMap: { [key: string]: string } = {
+            "factures": "facture",
+            "stock": "stock",
+            "personnel": "personnel",
+            "inventaire": "asset",
+            "school": "school",
+            "clinic": "clinic",
+            "pointage": "pointage",
+            "rapports": "data",
+            "archives": "archive"
+          };
+
+          const requiredModuleId = routeToModuleMap[currentModule];
+          
+          if (requiredModuleId && !data.services_choisis.includes(requiredModuleId)) {
+            router.push("/dashboard"); // Redirection immédiate si non autorisé
           }
         }
       }
@@ -50,23 +66,41 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     fetchUserServices();
   }, [pathname, router]);
 
-  // Organisation de vos choix sous forme de catégories scannables
+  // Organisation de vos 9 choix sous forme de catégories métiers claires
   const menuConfig = [
     {
-      category: "Pilotage",
+      category: "Pilotage & Décision",
       items: [
         { id: "always", name: "Vue d'ensemble", href: "/dashboard", icon: "📊" },
         { id: "data", name: "GreenData (Power BI)", href: "/dashboard/rapports", icon: "📈" }
       ]
     },
     {
-      category: "Logistique & Métiers",
+      category: "Gestion Commerciale & Flux",
       items: [
         { id: "facture", name: "GreenFacture", href: "/dashboard/factures", icon: "💳" },
-        { id: "stock", name: "GreenStock", href: "/dashboard/stock", icon: "📦" },
+        { id: "stock", name: "GreenStock", href: "/dashboard/stock", icon: "📦" }
+      ]
+    },
+    {
+      category: "Ressources Humaines",
+      items: [
         { id: "personnel", name: "GreenPersonnel", href: "/dashboard/personnel", icon: "👥" },
-        { id: "asset", name: "GreenAsset / Véhicules", href: "/dashboard/inventaire", icon: "🚗" },
-        { id: "school", name: "GreenSchool", href: "/dashboard/school", icon: "🏫" }
+        { id: "pointage", name: "GreenPointage", href: "/dashboard/pointage", icon: "⏱️" }
+      ]
+    },
+    {
+      category: "Infrastructures & Matériels",
+      items: [
+        { id: "asset", name: "GreenAsset / Matériels", href: "/dashboard/inventaire", icon: "🛡️" },
+        { id: "archive", name: "GreenArchive", href: "/dashboard/archives", icon: "📁" }
+      ]
+    },
+    {
+      category: "Solutions Métiers Spécialisées",
+      items: [
+        { id: "school", name: "GreenSchool", href: "/dashboard/school", icon: "🏫" },
+        { id: "clinic", name: "GreenClinic", href: "/dashboard/clinic", icon: "🩺" }
       ]
     },
     {
@@ -96,7 +130,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex text-slate-900 dark:text-slate-100">
       {/* Barre latérale adaptative */}
       <aside className="w-64 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 p-6 flex flex-col justify-between hidden md:flex">
-        <div className="space-y-8">
+        <div className="space-y-8 overflow-y-auto max-h-[85vh] pr-2">
           <div>
             <h2 className="text-xl font-black bg-gradient-to-r from-emerald-400 to-emerald-600 bg-clip-text text-transparent">
               GreenItCar
@@ -106,12 +140,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
           <nav className="space-y-6">
             {menuConfig.map((section, sIdx) => {
-              // On filtre les items de la section selon les choix de l'utilisateur
+              // Filtrer les items visibles selon les droits de l'utilisateur
               const itemsVisibles = section.items.filter(
                 (item) => item.id === "always" || activeServices.includes(item.id)
               );
 
-              // Si aucun item n'est visible dans cette catégorie (ex: Logistique vide), on masque la catégorie entière
+              // Masquer complètement une catégorie si elle n'a aucun module actif pour ce client
               if (itemsVisibles.length === 0) return null;
 
               return (
@@ -145,7 +179,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           </nav>
         </div>
 
-        {/* Bouton déconnexion en bas de la barre latérale */}
+        {/* Bouton déconnexion fixé en bas */}
         <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
           <button
             onClick={handleLogout}
