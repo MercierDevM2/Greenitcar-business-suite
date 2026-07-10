@@ -56,6 +56,68 @@ export default function ChoixServicesPage() {
 
       if (updateError) throw updateError;
 
+      if (servicesSelectionnes.includes("school")) {
+
+    const currentYear = new Date().getFullYear();
+
+    const libelle = `${currentYear}-${currentYear + 1}`;
+    const date_debut = `${currentYear}-09-01`;
+    const date_fin = `${currentYear + 1}-07-31`;
+
+    // Création de l'année scolaire
+    const { data: annee, error: anneeError } = await supabase
+        .from("gs_annees_scolaires")
+        .insert({
+            utilisateur_id: userId,
+            libelle,
+            date_debut,
+            date_fin,
+            active: true,
+        })
+        .select()
+        .single();
+
+        if (anneeError) throw anneeError;
+
+      const classes = [
+      // Maternelle
+      { nom: "Petite Section", niveau: "Maternelle" },
+      { nom: "Moyenne Section", niveau: "Maternelle" },
+      { nom: "Grande Section", niveau: "Maternelle" },
+
+      // Primaire
+      { nom: "CP1", niveau: "Primaire" },
+      { nom: "CP2", niveau: "Primaire" },
+      { nom: "CE1", niveau: "Primaire" },
+      { nom: "CE2", niveau: "Primaire" },
+      { nom: "CM1", niveau: "Primaire" },
+      { nom: "CM2", niveau: "Primaire" },
+
+      // Collège
+      { nom: "6ème", niveau: "Collège" },
+      { nom: "5ème", niveau: "Collège" },
+      { nom: "4ème", niveau: "Collège" },
+      { nom: "3ème", niveau: "Collège" },
+
+      // Lycée
+      { nom: "2nde", niveau: "Lycée" },
+      { nom: "1ère", niveau: "Lycée" },
+      { nom: "Terminale", niveau: "Lycée" },
+    ];
+        const { error: classesError } = await supabase
+      .from("gs_classes")
+      .insert(
+        classes.map((classe) => ({
+          utilisateur_id: userId,
+          annee_id: annee.id,
+          nom: classe.nom,
+          niveau: classe.niveau,
+        }))
+      );
+
+    if (classesError) throw classesError;
+    }
+
       // Succès : On redirige vers l'écran de succès de l'inscription
       router.push("/inscription/succes");
     } catch (err: any) {

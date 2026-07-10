@@ -48,8 +48,8 @@ function SaisieFormContent() {
         case "facture":
           tableName = "gf_factures";
           const total_ht = Number(formData.total_ht) || 0;
-          const total_ttc = total_ht * 1.2; // Exemple TVA 20%
-          const estimation_achat = total_ht * 0.6; // Simulation coût d'achat pour bénéfice
+          const total_ttc = total_ht * 1.2; 
+          const estimation_achat = total_ht * 0.6; 
           dataToInsert = {
             ...dataToInsert,
             client_nom: formData.client_nom,
@@ -94,22 +94,77 @@ function SaisieFormContent() {
           };
           break;
 
-        case "school":
-            tableName = "gs_eleves";
-            
-            const scolarite_totale = Number(formData.scolarite_totale) || 0;
-            const scolarite_payee = Number(formData.scolarite_payee) || 0;
+        case "school": {
+          // 1. Création de l'élève
+          const { data: eleve, error: eleveError } = await supabase
+              .from("gs_eleves")
+              .insert({
+                  utilisateur_id: userId,
+                  nom: formData.nom_eleve?.toUpperCase(),
+                  prenom: formData.prenom_eleve,
+                  sexe: formData.sexe,
+                  date_naissance: formData.date_naissance || null,
+                  nom_parent: formData.nom_parent,
+                  telephone_parent: formData.telephone_parent,
+                  adresse: formData.adresse,
+              })
+              .select()
+              .single();
 
-            dataToInsert = {
-                ...dataToInsert,
-                nom: formData.nom_eleve?.toUpperCase(), // Propre pour les listes
-                prenom: formData.prenom_eleve,
-                classe: formData.classe,
-                scolarite_totale: scolarite_totale,
-                scolarite_payee: scolarite_payee,
-            };
-            break;
+          if (eleveError) throw eleveError;
 
+          // 2. Création de l'inscription
+          const { data: inscription, error: inscriptionError } = await supabase
+              .from("gs_inscriptions")
+              .insert({
+                  utilisateur_id: userId,
+                  annee_id: Number(formData.annee_id),
+                  eleve_id: eleve.id,
+                  classe_id: Number(formData.classe_id),
+                  numero_matricule: formData.numero_matricule || null,
+                  scolarite_totale: Number(formData.scolarite_totale) || 0,
+                  reduction: Number(formData.reduction) || 0,
+              })
+              .select()
+              .single();
+
+          if (inscriptionError) throw inscriptionError;
+
+          // 3. Premier paiement (facultatif)
+          const acompte = Number(formData.acompte) || 0;
+
+          if (acompte > 0) {
+              const { error: paiementError } = await supabase
+                  .from("gs_paiements")
+                  .insert({
+                      utilisateur_id: userId,
+                      inscription_id: inscription.id,
+                      montant: acompte,
+                      mode_paiement: formData.mode_paiement || "Espèces",
+                      reference: formData.reference || null,
+                  });
+
+              if (paiementError) throw paiementError;
+          }
+
+          setStatus({ type: "success", text: "Élève inscrit avec succès ! Vos KPIs sont à jour." });
+          setFormData({});
+          setTimeout(() => router.push("/dashboard"), 1500);
+          return;
+        }
+
+        case "school_enseignant": {
+        tableName = "gs_enseignants";
+        dataToInsert = {
+          ...dataToInsert,
+          nom: formData.nom_enseignant?.toUpperCase(),
+          prenom: formData.prenom_enseignant,
+          telephone: formData.telephone_enseignant,
+          email: formData.email_enseignant,
+          specialite: formData.specialite_enseignant,
+        };
+        break;
+      }
 
         case "clinic":
           tableName = "gc_patients_consultations";
@@ -157,6 +212,35 @@ function SaisieFormContent() {
     }
   };
 
+  const [anneesScolaires, setAnneesScolaires] = useState<any[]>([]);
+  const [classes, setClasses] = useState<any[]>([]);
+
+  useEffect(() => {
+  async function chargerDonnees() {
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data: annees } = await supabase
+      .from("gs_annees_scolaires")
+      .select("id, libelle")
+      .eq("utilisateur_id", user.id)
+      .order("date_debut");
+
+    const { data: listeClasses } = await supabase
+      .from("gs_classes")
+      .select("id, nom")
+      .eq("utilisateur_id", user.id)
+      .order("niveau")
+      .order("nom");
+
+    setAnneesScolaires(annees || []);
+    setClasses(listeClasses || []);
+  }
+
+  chargerDonnees();
+}, []);
+
   return (
     <div className="max-w-xl mx-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-8 rounded-2xl shadow-sm">
       <div className="mb-6">
@@ -168,43 +252,130 @@ function SaisieFormContent() {
 
       <form onSubmit={handleSubmit} className="space-y-5">
         
-        {/* FORMULAIRE GREENFACTURE */}
-        {currentModule === "facture" && (
-          <>
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">Nom du client</label>
-              <input required type="text" name="client_nom" onChange={handleInputChange} className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm" placeholder="Client SARL" />
+         {/* ==================== CONFIGURATION COMPTABILITÉ : GREENFACTURE ==================== */}
+      {currentModule === "facture" && (
+        <div className="space-y-6">
+          {/* Conteneur Facture Style "Papier" */}
+          <div id="section-facture-imprimable" className="p-6 border border-slate-200 dark:border-slate-800 rounded-2xl bg-slate-50/50 dark:bg-slate-900/50 shadow-inner space-y-6">
+            
+            {/* En-tête Facture */}
+            <div className="flex justify-between items-start border-b border-slate-200 dark:border-slate-800 pb-4">
+              <div>
+                <h2 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">FACTURE DE VENTE</h2>
+                <p className="text-xs text-slate-400 mt-1">Date: {new Date().toLocaleDateString('fr-FR')}</p>
+              </div>
+              <div className="text-right">
+                <span className="text-xs font-mono bg-slate-200 dark:bg-slate-800 px-2 py-1 rounded text-slate-600 dark:text-slate-400">
+                  N° FACT-{(Date.now().toString().slice(-6))}
+                </span>
+              </div>
             </div>
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">Montant HT (FCFA)</label>
-              <input required type="number" name="total_ht" onChange={handleInputChange} className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm" placeholder="50000" />
-            </div>
-          </>
-        )}
 
-        {/* FORMULAIRE GREENSTOCK */}
-        {currentModule === "stock" && (
-          <>
+            {/* Informations Client */}
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">Nom du produit / article</label>
-              <input required type="text" name="nom_produit" onChange={handleInputChange} className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm" placeholder="Ciment 50kg, Paracétamol..." />
+              <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                Nom du client / Entreprise *
+              </label>
+              <input
+                type="text"
+                name="client_nom"
+                required
+                value={formData.client_nom || ""}
+                onChange={handleInputChange}
+                placeholder="ex: Client Comptant, Société X"
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">Prix Achat</label>
-                <input required type="number" name="prix_achat" onChange={handleInputChange} className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm" />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">Prix Vente</label>
-                <input required type="number" name="prix_vente" onChange={handleInputChange} className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm" />
-              </div>
-            </div>
+
+             {/* AJOUT : Désignation de l'article acheté */}
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">Quantité initiale en stock</label>
-              <input required type="number" name="stock_actuel" onChange={handleInputChange} className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm" placeholder="100" />
+              <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                Désignation de l'article acheté *
+              </label>
+              <input
+                type="text"
+                name="designation_produit"
+                required
+                value={formData.designation_produit || ""}
+                onChange={handleInputChange}
+                placeholder="ex: iPhone 14 Pro, Souris Logitech USB, PC HP EliteBook"
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
             </div>
-          </>
-        )}
+
+            {/* Détails du Montant */}
+            <div className="border-t border-dashed border-slate-200 dark:border-slate-800 pt-4 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                  Montant Total de la vente (HT) *
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    name="total_ht"
+                    required
+                    value={formData.total_ht || ""}
+                    onChange={handleInputChange}
+                    placeholder="ex: 250000"
+                    className="w-full pl-4 pr-16 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                    FCFA
+                  </span>
+                </div>
+              </div>
+
+              {/* Bloc de Ventilation Financière Automatique */}
+              {Number(formData.total_ht) > 0 && (
+                <div className="p-4 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800/60 rounded-xl space-y-2 text-sm animate-fadeIn">
+                  <div className="flex justify-between text-slate-500">
+                    <span>Montant HT :</span>
+                    <span className="font-mono">{(Number(formData.total_ht)).toLocaleString('fr-FR')} FCFA</span>
+                  </div>
+                  <div className="flex justify-between text-slate-500">
+                    <span>TVA Estimée (20%) :</span>
+                    <span className="font-mono">{(Number(formData.total_ht) * 0.2).toLocaleString('fr-FR')} FCFA</span>
+                  </div>
+                  <div className="flex justify-between font-bold border-t border-slate-100 dark:border-slate-800 pt-2 text-slate-900 dark:text-white text-base">
+                    <span>Total à Payer (TTC) :</span>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-mono">
+                      {(Number(formData.total_ht) * 1.2).toLocaleString('fr-FR')} FCFA
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Paramètres de validation de la transaction */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                Mode de règlement & Statut
+              </label>
+              <select
+                name="statut"
+                value={formData.statut || "payee"}
+                onChange={handleInputChange}
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="payee">Payée au comptant (Espèces / Mobile Money)</option>
+                <option value="en_attente">En attente de paiement (Facture proforma / Crédit)</option>
+              </select>
+            </div>
+
+          </div>
+
+          {/* Bouton d'Impression Direct de l'Aperçu Écran */}
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-4 py-2 rounded-xl transition-all flex items-center gap-1.5 border border-slate-200 dark:border-slate-700/60 shadow-sm"
+            >
+              🖨️ Imprimer cet aperçu client
+            </button>
+          </div>
+        </div>
+      )}
 
                {/* FORMULAIRE GREENPERSONNEL */}
         {currentModule === "personnel" && (
@@ -253,34 +424,322 @@ function SaisieFormContent() {
           </>
         )}
 
-        {/* FORMULAIRE GREENSCHOOL */}
-        {currentModule === "school" && (
-          <>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">Nom de l'élève</label>
-                <input required type="text" name="nom_eleve" onChange={handleInputChange} className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm" />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">Prénom</label>
-                <input required type="text" name="prenom_eleve" onChange={handleInputChange} className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm" />
-              </div>
-            </div>
+      {/* FORMULAIRE GREENSCHOOL */}
+      {currentModule === "school" && (
+        <>
+          {/* Informations élève */}
+          <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">Classe</label>
-              <input required type="text" name="classe" onChange={handleInputChange} className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm" placeholder="Terminales S1, CM2-A..." />
+              <label className="text-xs font-bold text-slate-500 uppercase">
+                Nom(s)
+              </label>
+              <input
+                required
+                type="text"
+                name="nom_eleve"
+                onChange={handleInputChange}
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm"
+              />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase">
+                Prénom(s)
+              </label>
+              <input
+                required
+                type="text"
+                name="prenom_eleve"
+                onChange={handleInputChange}
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase">
+                Sexe
+              </label>
+              <select
+                name="sexe"
+                onChange={handleInputChange}
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+              >
+                <option value="">Choisir</option>
+                <option value="Masculin">Masculin</option>
+                <option value="Féminin">Féminin</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase">
+                Date de naissance
+              </label>
+              <input
+                type="date"
+                name="date_naissance"
+                onChange={handleInputChange}
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase">
+              Nom du parent / Tuteur
+            </label>
+            <input
+              type="text"
+              name="nom_parent"
+              onChange={handleInputChange}
+              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase">
+              Téléphone du parent
+            </label>
+            <input
+              type="text"
+              name="telephone_parent"
+              onChange={handleInputChange}
+              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase">
+              Adresse
+            </label>
+            <input
+              type="text"
+              name="adresse"
+              onChange={handleInputChange}
+              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+            />
+          </div>
+
+          <hr className="my-5" />
+
+          {/* Inscription */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase">
+                Année scolaire
+              </label>
+              <select
+                required
+                name="annee_id"
+                onChange={handleInputChange}
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+              >
+                <option value="">Sélectionner</option>
+
+                {anneesScolaires.map((annee) => (
+                  <option key={annee.id} value={annee.id}>
+                    {annee.libelle}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase">
+                Classe
+              </label>
+              <select
+                required
+                name="classe_id"
+                onChange={handleInputChange}
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+              >
+                <option value="">Sélectionner</option>
+
+                {classes.map((classe) => (
+                  <option key={classe.id} value={classe.id}>
+                    {classe.nom}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase">
+              Numéro matricule
+            </label>
+            <input
+              type="text"
+              name="numero_matricule"
+              onChange={handleInputChange}
+              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase">
+                Frais de scolarité
+              </label>
+              <input
+                required
+                type="number"
+                name="scolarite_totale"
+                onChange={handleInputChange}
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase">
+                Réduction
+              </label>
+              <input
+                type="number"
+                name="reduction"
+                defaultValue={0}
+                onChange={handleInputChange}
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+              />
+            </div>
+          </div>
+
+          <hr className="my-5" />
+
+          {/* Paiement */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase">
+                Acompte versé
+              </label>
+              <input
+                type="number"
+                name="acompte"
+                defaultValue={0}
+                onChange={handleInputChange}
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase">
+                Mode de paiement
+              </label>
+              <select
+                name="mode_paiement"
+                onChange={handleInputChange}
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+              >
+                <option value="Espèces">Espèces</option>
+                <option value="Mobile Money">Mobile Money</option>
+                <option value="Virement">Virement</option>
+                <option value="Chèque">Chèque</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase">
+              Référence du paiement
+            </label>
+            <input
+              type="text"
+              name="reference"
+              onChange={handleInputChange}
+              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+            />
+          </div>
+        </>
+      )}
+
+      {/* FORMULAIRE GREEN_SCHOOL : ENSEIGNANTS */}
+        {currentModule === "school_enseignant" && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">Frais Scolarité (Annuel)</label>
-                <input required type="number" name="scolarite_totale" onChange={handleInputChange} className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm" placeholder="450000" />
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                  Nom de l'enseignant *
+                </label>
+                <input
+                  type="text"
+                  name="nom_enseignant"
+                  required
+                  value={formData.nom_enseignant || ""}
+                  onChange={handleInputChange}
+                  placeholder="ex: NOM"
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
               </div>
+
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">Acompte Versé (Paiement)</label>
-                <input required type="number" name="scolarite_payee" onChange={handleInputChange} className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm" placeholder="150000" />
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                  Prénom de l'enseignant *
+                </label>
+                <input
+                  type="text"
+                  name="prenom_enseignant"
+                  required
+                  value={formData.prenom_enseignant || ""}
+                  onChange={handleInputChange}
+                  placeholder="ex: Prénom"
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
               </div>
             </div>
-          </>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                Numéro de Téléphone *
+              </label>
+              <input
+                type="tel"
+                name="telephone_enseignant"
+                required
+                value={formData.telephone_enseignant || ""}
+                onChange={handleInputChange}
+                placeholder="ex: +236..."
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                Adresse Email
+              </label>
+              <input
+                type="email"
+                name="email_enseignant"
+                value={formData.email_enseignant || ""}
+                onChange={handleInputChange}
+                placeholder="ex: enseignant@ecole.com"
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                Spécialité / Matière enseignée
+              </label>
+              <select
+                name="specialite_enseignant"
+                value={formData.specialite_enseignant || ""}
+                onChange={handleInputChange}
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="">Sélectionnez une spécialité</option>
+                <option value="Maternelle (Maternelle)">Généraliste (Maternelle)</option>
+                <option value="Généraliste (Primaire)">Généraliste (Primaire)</option>
+                <option value="Mathématiques">Mathématiques</option>
+                <option value="Français / Lettres">Français / Lettres</option>
+                <option value="Histoire-Géographie">Histoire-Géographie</option>
+                <option value="Sciences (SVT/Physique)">Sciences (SVT / Physique)</option>
+                <option value="Anglais">Anglais</option>
+                <option value="Éducation Physique (EPS)">Éducation Physique (EPS)</option>
+              </select>
+            </div>
+          </div>
         )}
 
         {/* FORMULAIRE GREENCLINIC */}
