@@ -39,25 +39,30 @@ const [rawFacturation, setRawFacturation] = useState({
   factures: [] as any[],
   produits: [] as any[],
   alertesStock: 0,
+  valeurStock: 0,
+  chiffreAffaires: 0,
+  margeTotale: 0,
 });
 
 
 const loadSchoolData = async (userId: string, anneeId: string) => {
-  // 1. Inscriptions de l'année
+  // 1. Inscriptions + Jointure pour avoir les infos complètes de l'élève et de sa classe
   const { data: inscriptions } = await supabase
     .from("gs_inscriptions")
     .select(`
       id,
       scolarite_totale,
       classe_id,
-      gs_classes ( nom, niveau )
+      numero_matricule,
+      gs_classes ( nom, niveau ),
+      gs_eleves ( nom, prenom, telephone_parent, nom_parent )
     `)
     .eq("utilisateur_id", userId)
     .eq("annee_id", anneeId);
 
   const inscriptionIds = inscriptions?.map(i => i.id) || [];
 
-  // 2. Paiements (Uniquement liés aux inscriptions de cette année)
+  // 2. Paiements liés
   let paiements: any[] = [];
   if (inscriptionIds.length > 0) {
     const { data: paiementsData } = await supabase
@@ -69,36 +74,38 @@ const loadSchoolData = async (userId: string, anneeId: string) => {
     paiements = paiementsData || [];
   }
 
-  // Enseignants
-  const { count: enseignants } = await supabase
+  // 3. Enseignants : On charge la liste complète au lieu d'un simple count principal
+  const { data: listeEnseignants } = await supabase
     .from("gs_enseignants")
-    .select("*", { count: "exact", head: true })
+    .select("id, nom, prenom, telephone, specialite")
     .eq("utilisateur_id", userId);
 
-  // Classes
-  const { count: classes } = await supabase
+  // 4. Classes
+  const { count: classesCount } = await supabase
     .from("gs_classes")
     .select("*", { count: "exact", head: true })
     .eq("utilisateur_id", userId)
     .eq("annee_id", anneeId);
 
   const { data: listeClasses } = await supabase
-  .from("gs_classes")
-  .select("id, nom")
-  .eq("utilisateur_id", userId)
-  .eq("annee_id", anneeId)
-  .order("niveau")
-  .order("nom");
-setClasses(listeClasses || []);
+    .from("gs_classes")
+    .select("id, nom")
+    .eq("utilisateur_id", userId)
+    .eq("annee_id", anneeId)
+    .order("niveau")
+    .order("nom");
+    
+  setClasses(listeClasses || []);
 
+  // On stocke les listes complètes dans le state brut
   setRawEleves({
-  inscriptions: inscriptions || [],
-  paiements: paiements || [],
-  enseignants: enseignants || 0,
-  classes: classes || 0,
-});
-
+    inscriptions: inscriptions || [],
+    paiements: paiements || [],
+    enseignants: listeEnseignants ? listeEnseignants.length : 0,
+    classes: classesCount || 0,
+  });
 };
+
 
 const loadFactureData = async (userId: string) => {
   // 1. Récupérer toutes les factures du commerçant
@@ -107,20 +114,32 @@ const loadFactureData = async (userId: string) => {
     .select("id, total_ht, total_ttc, benefice_realise, statut")
     .eq("utilisateur_id", userId);
 
-  // 2. Récupérer le catalogue complet de produits pour valoriser le stock
+  // 2. Récupérer le catalogue complet pour valoriser le stock
   const { data: produits } = await supabase
     .from("gf_produits")
     .select("id, prix_achat, stock_actuel, stock_alerte")
     .eq("utilisateur_id", userId);
 
-  // 3. Compter les articles en alerte de stock
+  // 3. Calculs financiers pour le commerce de gros et d'appareils
   const alertesCount = produits?.filter(p => Number(p.stock_actuel) <= Number(p.stock_alerte)).length || 0;
+  
+  // Valeur totale de l'argent immobilisé dans le dépôt (Prix achat * Quantité)
+  const totalValeurStock = produits?.reduce((sum, p) => 
+    sum + (Number(p.prix_achat) || 0) * (Number(p.stock_actuel) || 0), 0) || 0;
+
+  const totalCA = factures?.reduce((sum, f) => sum + (Number(f.total_ht) || 0), 0) || 0;
+  const totalMarge = factures?.reduce((sum, f) => sum + (Number(f.benefice_realise) || 0), 0) || 0;
 
   setRawFacturation({
     factures: factures || [],
     produits: produits || [],
     alertesStock: alertesCount,
+    valeurStock: totalValeurStock,
+    chiffreAffaires: totalCA,
+    margeTotale: totalMarge,
   });
+
+  return { alertesCount, totalValeurStock, totalCA, totalMarge };
 };
 
 
@@ -142,18 +161,39 @@ const loadFactureData = async (userId: string) => {
 
       let dynamicKpis: KpiCard[] = [];
 
-      // -- GREENFACTURE --
+            // -- GREENFACTURE & GREENSTOCK --
       if (services.includes("facture") || services.includes("stock")) {
-        const { data: factData } = await supabase.from("gf_factures").select("benefice_realise").eq("utilisateur_id", user.id);
-        const { count: lowStock } = await supabase.from("gf_produits").select("*", { count: "exact", head: true }).eq("utilisateur_id", user.id).lt("stock_actuel", "stock_alerte");
-        
-        const totalBenef = factData?.reduce((sum, f) => sum + (Number(f.benefice_realise) || 0), 0) || 0;
+        // Déclenche le chargement et récupère les calculs frais
+        const dataCommerce = await loadFactureData(user.id);
 
-        if (services.includes("facture") || services.includes("stock")) {
-          await loadFactureData(user.id);
+        if (services.includes("facture")) {
+          dynamicKpis.push({ 
+            title: "Chiffre d'Affaires HT", 
+            value: `${dataCommerce.totalCA.toLocaleString()} FCFA`, 
+            moduleName: "GreenFacture", 
+            color: "text-emerald-600" 
+          });
+          dynamicKpis.push({ 
+            title: "Marge brute réalisée", 
+            value: `${dataCommerce.totalMarge.toLocaleString()} FCFA`, 
+            moduleName: "GreenFacture", 
+            color: "text-sky-600" 
+          });
         }
+
         if (services.includes("stock")) {
-          dynamicKpis.push({ title: "Articles en alerte stock", value: lowStock || 0, moduleName: "GreenStock", color: "text-amber-600" });
+          dynamicKpis.push({ 
+            title: "Valeur du Stock (Achat)", 
+            value: `${dataCommerce.totalValeurStock.toLocaleString()} FCFA`, 
+            moduleName: "GreenStock", 
+            color: "text-indigo-600" 
+          });
+          dynamicKpis.push({ 
+            title: "Articles en alerte stock", 
+            value: dataCommerce.alertesCount, 
+            moduleName: "GreenStock", 
+            color: "text-rose-600" 
+          });
         }
       }
 
@@ -190,26 +230,23 @@ const loadFactureData = async (userId: string) => {
         dynamicKpis.push({ title: "Éléments Traités / Sécurisés", value: totalDocs || 0, moduleName: "Business Data", color: "text-violet-600" });
       }
 
-     // -- GREENSCHOOL--
-    if (services.includes("school")) {
+      // -- GREENSCHOOL --
+      if (services.includes("school")) {
+        const { data: listeAnnees } = await supabase
+          .from("gs_annees_scolaires")
+          .select("id, libelle, active")
+          .eq("utilisateur_id", user.id)
+          .order("date_debut", { ascending: false });
 
-      const { data: listeAnnees } = await supabase
-        .from("gs_annees_scolaires")
-        .select("id, libelle, active")
-        .eq("utilisateur_id", user.id)
-        .order("date_debut", { ascending: false });
-
-      if (listeAnnees?.length) {
-        setAnnees(listeAnnees);
-
-        const active =
-          listeAnnees.find((a) => a.active) || listeAnnees[0];
-
-        setCurrentAnnee(active.id);
-
-        await loadSchoolData(user.id, active.id);
+        if (listeAnnees?.length) {
+          setAnnees(listeAnnees);
+          const active = listeAnnees.find((a) => a.active) || listeAnnees[0];
+          setCurrentAnnee(active.id);
+          
+          // Charge l'ensemble des collections élèves/profs
+          await loadSchoolData(user.id, active.id);
+        }
       }
-    }
       
       setKpis(dynamicKpis);
       setLoading(false);
@@ -382,8 +419,9 @@ useEffect(() => {
 
     const venteKpis = [];
 
-    // KPIs dédiés à la Facturation / Caisse
-    if (aActiveFacture) {
+        // KPIs dédiés à la Facturation / Caisse
+    // Affiché si l'un ou l'autre est activé
+    if (aActiveFacture || aActiveStock) {
       venteKpis.push(
         {
           title: "Chiffre d'Affaires (TTC)",
@@ -407,7 +445,8 @@ useEffect(() => {
     }
 
     // KPIs dédiés aux Articles / Marchandises
-    if (aActiveStock) {
+    // Affiché aussi dès que l'un des deux services est actif
+    if (aActiveFacture || aActiveStock) {
       venteKpis.push(
         {
           title: "Valeur du Stock (Achat)",
@@ -457,6 +496,7 @@ useEffect(() => {
         </button>
       )}
 
+      
       {/* Regroupement des filtres si le module school est actif */}
       {activeServices.includes("school") && (
         <div className="flex flex-wrap items-center gap-4">
@@ -476,6 +516,12 @@ useEffect(() => {
                 </option>
               ))}
             </select>
+            <button 
+              onClick={() => router.push("/dashboard/school/eleves")}
+              className="bg-white text-blue-700 hover:bg-blue-50 px-4 py-2 rounded-lg font-semibold text-sm shadow transition-colors flex-1 sm:flex-none text-center"
+            >
+            👨‍🎓 Liste des Élèves
+          </button>
           </div>
 
           {/* Filtre Classe réintégré au bon endroit */}
@@ -495,6 +541,13 @@ useEffect(() => {
                 </option>
               ))}
             </select>
+
+            <button 
+              onClick={() => router.push("/dashboard/school/enseignants")}
+              className="bg-blue-800 text-white hover:bg-blue-900 border border-blue-500 px-4 py-2 rounded-lg font-semibold text-sm shadow transition-colors flex-1 sm:flex-none text-center"
+            >
+            👩‍🏫 Enseignants
+          </button>
           </div>
         </div>
       )}

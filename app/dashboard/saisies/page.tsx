@@ -17,6 +17,29 @@ function SaisieFormContent() {
   const [userId, setUserId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [nomEntreprise, setNomEntreprise] = useState<string>("Mon Entreprise");
+
+useEffect(() => {
+  async function getAuth() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      setUserId(user.id);
+
+      // Récupération du nom de l'entreprise depuis ta table "utilisateurs"
+      const { data: userData } = await supabase
+        .from("utilisateurs")
+        .select("nom_entreprise")
+        .eq("id", user.id)
+        .single();
+
+      if (userData?.nom_entreprise) {
+        setNomEntreprise(userData.nom_entreprise);
+      }
+    }
+  }
+  getAuth();
+}, []);
+
 
   // États génériques pour stocker les champs des différents formulaires
   const [formData, setFormData] = useState<any>({});
@@ -48,15 +71,16 @@ function SaisieFormContent() {
         case "facture":
           tableName = "gf_factures";
           const total_ht = Number(formData.total_ht) || 0;
-          const total_ttc = total_ht * 1.2; 
-          const estimation_achat = total_ht * 0.6; 
+          const total_ttc = total_ht; // Commerce local / HT = TTC ou géré via taxes
+          const estimation_achat = total_ht * 0.75; // Estimation de marge (75% coût d'achat)
+          
           dataToInsert = {
             ...dataToInsert,
-            client_nom: formData.client_nom,
+            client_nom: formData.client_nom || "Client Comptant",
             total_ht,
             total_ttc,
             benefice_realise: total_ttc - estimation_achat,
-            statut: formData.statut || "payee",
+            statut: formData.statut || "payee", // 'payee' ou 'en_attente'
           };
           break;
 
@@ -248,6 +272,9 @@ function SaisieFormContent() {
           Saisie Module : Green{currentModule.charAt(0).toUpperCase() + currentModule.slice(1)}
         </span>
         <h1 className="text-xl font-bold text-slate-900 dark:text-white mt-3">Ajouter un enregistrement</h1>
+        <h2 className="text-sm font-semibold text-emerald-600 uppercase tracking-wider mt-1">
+          {nomEntreprise} — {currentModule.charAt(0).toUpperCase() + currentModule.slice(1)}
+        </h2>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-5">

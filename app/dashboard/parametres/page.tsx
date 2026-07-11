@@ -10,8 +10,7 @@ const supabase = createClient(
 );
 
 const AVAILABLE_MODULES = [
-  { id: "facture", name: "GreenFacture", description: "...", icon: "💳", setupHref: "/dashboard/saisies?module=facture" },
-  { id: "stock", name: "GreenStock", description: "...", icon: "📦", setupHref: "/dashboard/saisies?module=stock" },
+  { id: "facture", name: "GreenFacture", description: "Ajouter des articles et emmettre des factures.", icon: "💵", setupHref: "/dashboard/parametres/stock" }, { id: "stock", name: "GreenStock", description: "Gérer votre stock.", icon: "💳", setupHref: "/dashboard/parametres/stock" },
   { id: "personnel", name: "GreenPersonnel", description: "...", icon: "👥", setupHref: "/dashboard/saisies?module=personnel" },
   { id: "asset", name: "GreenAsset", description: "...", icon: "🛡️", setupHref: "/dashboard/saisies?module=asset" },
   { id: "school", name: "GreenSchool (Inscription)", description: "Inscription des élèves", icon: "🏫", setupHref: "/dashboard/saisies?module=school" },
