@@ -6,6 +6,10 @@ const withPWA = withPWAInit({
   dest: "public",
   disable: process.env.NODE_ENV === "development",
   register: true,
+  // Regroupement des options Workbox pour éviter l'erreur de type
+  workboxOptions: {
+    exclude: [/middleware-manifest\.json$/, /page_client-reference-manifest\.js$/],
+  }
 });
 
 const nextConfig: NextConfig = {
