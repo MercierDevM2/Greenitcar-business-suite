@@ -23,7 +23,7 @@ const solutions = [
 const benefits = [
   {
     title: "Simple",
-    description: "Fonctionne même avec une faible connexion.",
+    description: "Fonctionne même avec hors connexion internet.",
   },
   {
     title: "Rapide",
@@ -161,7 +161,7 @@ export default function Home() {
         <section className="mx-auto grid max-w-7xl gap-10 px-6 py-16 lg:grid-cols-[1.1fr_0.9fr] lg:px-8 lg:py-24">
           <div className="mx-auto max-w-2xl text-center lg:mx-0 lg:text-left">
             <h1 className="text-4xl font-semibold leading-tight text-white sm:text-5xl lg:text-6xl">
-              Le partenaire de la transformation numérique des entreprises africaines.
+              Le partenaire de la transformation numérique des entreprises Centrafricaines.
             </h1>
             <p className="mt-6 text-lg leading-8 text-slate-300">
               Des logiciels simples et puissants pour gérer votre boutique, votre ONG, votre école ou votre entreprise.

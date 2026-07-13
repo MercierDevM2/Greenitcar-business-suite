@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 
@@ -9,7 +9,8 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-export default function ChoixServicesPage() {
+// 1. Sous-composant englobant toute la logique et l'interface utilisateur
+function ChoixServicesContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const userId = searchParams.get("userId"); // Récupère l'ID depuis l'URL
@@ -27,10 +28,6 @@ export default function ChoixServicesPage() {
 
   const catalogueServices = [
     { id: "facture", title: "GreenFacture", desc: "Créer vos factures", icon: "💳" },
-    { id: "stock", title: "GreenStock", desc: "Gérer votre stock", icon: "📦" },
-    { id: "personnel", title: "GreenPersonnel", desc: "Gérer votre personnel", icon: "👥" },
-    { id: "asset", title: "GreenAsset", desc: "Inventorier vos équipements", icon: "🚗" },
-    { id: "data", title: "GreenData", desc: "Tableaux de bord Power BI", icon: "📊" },
     { id: "school", title: "GreenSchool", desc: "Gestion scolaire", icon: "🏫" },
   ];
 
@@ -57,66 +54,62 @@ export default function ChoixServicesPage() {
       if (updateError) throw updateError;
 
       if (servicesSelectionnes.includes("school")) {
+        const currentYear = new Date().getFullYear();
+        const libelle = `${currentYear}-${currentYear + 1}`;
+        const date_debut = `${currentYear}-09-01`;
+        const date_fin = `${currentYear + 1}-07-31`;
 
-    const currentYear = new Date().getFullYear();
-
-    const libelle = `${currentYear}-${currentYear + 1}`;
-    const date_debut = `${currentYear}-09-01`;
-    const date_fin = `${currentYear + 1}-07-31`;
-
-    // Création de l'année scolaire
-    const { data: annee, error: anneeError } = await supabase
-        .from("gs_annees_scolaires")
-        .insert({
+        // Création de l'année scolaire
+        const { data: annee, error: anneeError } = await supabase
+          .from("gs_annees_scolaires")
+          .insert({
             utilisateur_id: userId,
             libelle,
             date_debut,
             date_fin,
             active: true,
-        })
-        .select()
-        .single();
+          })
+          .select()
+          .single();
 
         if (anneeError) throw anneeError;
 
-      const classes = [
-      // Maternelle
-      { nom: "Petite Section", niveau: "Maternelle" },
-      { nom: "Moyenne Section", niveau: "Maternelle" },
-      { nom: "Grande Section", niveau: "Maternelle" },
+        const classes = [
+          // Maternelle
+          { nom: "Petite Section", niveau: "Maternelle" },
+          { nom: "Moyenne Section", niveau: "Maternelle" },
+          { nom: "Grande Section", niveau: "Maternelle" },
+          // Primaire
+          { nom: "CP1", niveau: "Primaire" },
+          { nom: "CP2", niveau: "Primaire" },
+          { nom: "CE1", niveau: "Primaire" },
+          { nom: "CE2", niveau: "Primaire" },
+          { nom: "CM1", niveau: "Primaire" },
+          { nom: "CM2", niveau: "Primaire" },
+          // Collège
+          { nom: "6ème", niveau: "Collège" },
+          { nom: "5ème", niveau: "Collège" },
+          { nom: "4ème", niveau: "Collège" },
+          { nom: "3ème", niveau: "Collège" },
+          // Lycée
+          { nom: "2nde", niveau: "Lycée" },
+          { nom: "1ère", niveau: "Lycée" },
+          { nom: "Terminale", niveau: "Lycée" },
+        ];
 
-      // Primaire
-      { nom: "CP1", niveau: "Primaire" },
-      { nom: "CP2", niveau: "Primaire" },
-      { nom: "CE1", niveau: "Primaire" },
-      { nom: "CE2", niveau: "Primaire" },
-      { nom: "CM1", niveau: "Primaire" },
-      { nom: "CM2", niveau: "Primaire" },
-
-      // Collège
-      { nom: "6ème", niveau: "Collège" },
-      { nom: "5ème", niveau: "Collège" },
-      { nom: "4ème", niveau: "Collège" },
-      { nom: "3ème", niveau: "Collège" },
-
-      // Lycée
-      { nom: "2nde", niveau: "Lycée" },
-      { nom: "1ère", niveau: "Lycée" },
-      { nom: "Terminale", niveau: "Lycée" },
-    ];
         const { error: classesError } = await supabase
-      .from("gs_classes")
-      .insert(
-        classes.map((classe) => ({
-          utilisateur_id: userId,
-          annee_id: annee.id,
-          nom: classe.nom,
-          niveau: classe.niveau,
-        }))
-      );
+          .from("gs_classes")
+          .insert(
+            classes.map((classe) => ({
+              utilisateur_id: userId,
+              annee_id: annee.id,
+              nom: classe.nom,
+              niveau: classe.niveau,
+            }))
+          );
 
-    if (classesError) throw classesError;
-    }
+        if (classesError) throw classesError;
+      }
 
       // Succès : On redirige vers l'écran de succès de l'inscription
       router.push("/inscription/succes");
@@ -173,5 +166,18 @@ export default function ChoixServicesPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+// 2. Exportation par défaut enveloppée dans le Suspense Boundary requis par Next.js
+export default function ChoixServicesPage() {
+  return (
+    <Suspense fallback={
+      <main className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
+        Chargement de l'assistant de configuration...
+      </main>
+    }>
+      <ChoixServicesContent />
+    </Suspense>
   );
 }

@@ -21,6 +21,7 @@ export default function InscriptionPage() {
     nom: "",
     prenom: "",
     terme: false,
+    numero_registre_du_commerce: "",
   });
 
   const [otpCode, setOtpCode] = useState("");
@@ -68,6 +69,9 @@ export default function InscriptionPage() {
       newErrors.prenom = "Le prénom est requis";
     if (!formData.terme)
       newErrors.terme = "Vous devez accepter les conditions d'utilisation";
+    if (!formData.numero_registre_du_commerce)
+      newErrors.numero_registre_du_commerce =
+        "Le numéro de registre du commerce est requis";
 
     return newErrors;
   };
@@ -161,6 +165,7 @@ export default function InscriptionPage() {
               nom: formData.nom,
               prenom: formData.prenom,
               services_choisis: [], // Initialisé à vide, complété à la page suivante
+              numero_registre_du_commerce: formData.numero_registre_du_commerce,
             },
           ]);
 
@@ -195,6 +200,7 @@ export default function InscriptionPage() {
             telephone: formData.telephone,
             secteur_activite: formData.secteur_activite,
             nombre_employe: formData.nombre_employe,
+            numero_registre_du_commerce: formData.numero_registre_du_commerce,
           },
         },
       });
@@ -482,6 +488,26 @@ export default function InscriptionPage() {
                     <option value="51-200">51-200</option>
                     <option value="200+">200+</option>
                   </select>
+                </div>
+
+                 <div>
+                  <label htmlFor="siret" className="block text-slate-800 dark:text-slate-200 text-sm font-semibold mb-2">
+                    Numéro de SIRET *
+                  </label>
+                  <input
+                    type="text"
+                    id="numero_registre_du_commerce"
+                    name="numero_registre_du_commerce"
+                    value={formData.numero_registre_du_commerce}
+                    onChange={handleChange}
+                    placeholder="123 456 789 00012"
+                    className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                  />
+                  {errors.numero_registre_du_commerce && (
+                    <p className="text-red-600 dark:text-red-400 text-sm mt-1">
+                      {errors.numero_registre_du_commerce}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

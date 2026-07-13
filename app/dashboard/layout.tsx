@@ -4,6 +4,10 @@ import { useEffect, useState, ReactNode } from "react";
 import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
+import { hydraterBaseLocale } from "../lib/syncService"; // Import du service d'aspiration de données
+import { declencherSynchronisation } from "../hooks/useSync"; // Import du déclencheur de synchro montante
+import { db as baseDb } from "../lib/db";
+const db = baseDb as any; // Désactive le contrôle strict de type sur cet objet
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -13,17 +17,95 @@ const supabase = createClient(
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [activeServices, setActiveServices] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingSync, setLoadingSync] = useState(false);
+  const [isOnline, setIsOnline] = useState(typeof window !== "undefined" ? navigator.onLine : true);
+  
   const router = useRouter();
   const pathname = usePathname();
 
+  // Écouteur d'état du réseau internet
   useEffect(() => {
-    async function fetchUserServices() {
+    const handleOnline = () => {
+      setIsOnline(true);
+      declencherSynchronisation(); // Pousse les modifications locales vers Supabase dès qu'internet revient
+    };
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+  const verifierFraudeEtLicence = async () => {
+    const { data: user } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const dateSystemePC = new Date();
+    
+    // 1. Lire les dernières infos de sécurité stockées dans le disque dur du PC
+    const configLocale = await db['securite_licence'].get('statut_verrou');
+    
+    if (configLocale) {
+      const ancienneDatePC = new Date(configLocale.derniere_date_vue);
+      
+      // TRICHE 1 : L'utilisateur a reculé l'heure de son Windows pour étendre sa licence en espèces
+      if (dateSystemePC < ancienneDatePC) {
+        router.push("/bloque?raison=clock_fraud");
+        return;
+      }
+    }
+
+    // 2. Mettre à jour la date locale sur le PC (chaque minute par exemple)
+    await db.securite_licence.put({
+      id: 'statut_verrou',
+      derniere_date_vue: dateSystemePC.toISOString()
+    });
+    
+          // --- TRICHE 2 : Le PC est resté hors-ligne trop longtemps pour ne pas recevoir l'ordre de blocage du cloud ---
+      // @ts-ignore
+      const uId = user?.id;
+      
+      if (uId) {
+        const dateDerniereSynchroCloud = localStorage.getItem(`derniere_synchro_serveur_${uId}`);
+        if (dateDerniereSynchroCloud) {
+          const joursDepuisSynchro = (dateSystemePC.getTime() - new Date(dateDerniereSynchroCloud).getTime()) / (1000 * 60 * 60 * 24);
+          if (joursDepuisSynchro > 7) {
+            router.push("/bloque?raison=sync_required");
+            return;
+          }
+        }
+      }
+
+  };
+
+  // Exécuter la vérification au démarrage et toutes les 5 minutes
+  verifierFraudeEtLicence();
+  const interval = setInterval(verifierFraudeEtLicence, 5 * 60 * 1000);
+  return () => clearInterval(interval);
+}, []);
+
+
+  useEffect(() => {
+    async function fetchUserServicesAndHydrate() {
       const { data: { user } } = await supabase.auth.getUser();
       
       // Sécurité 1 : Si l'utilisateur n'est pas connecté, retour à la connexion
       if (!user) {
         router.push("/connexion");
         return;
+      }
+
+      // --- HYDRATATION EN AMONT POUR LE MODE HORS-LIGNE ---
+      const dejaHydrate = localStorage.getItem(`greenitcar_hydrated_${user.id}`);
+      if (!dejaHydrate && navigator.onLine) {
+        setLoadingSync(true);
+        await hydraterBaseLocale(user.id); // Copie toutes les tables Supabase sur IndexedDB
+        setLoadingSync(false);
       }
 
       const { data } = await supabase
@@ -36,12 +118,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         setActiveServices(data.services_choisis);
         
         // Sécurité 2 : Bloquer l'accès manuel par URL si le service n'est pas choisi
-        const currentModule = pathname.split("/")[2]; // récupère 'school', 'stock', etc.
+        const currentModule = pathname.split("/")[2]; 
         
         const routesAutoriseesSansModule = ["notifications", "profil", "parametres", undefined];
 
         if (!routesAutoriseesSansModule.includes(currentModule)) {
-          // Mapping strict entre le sous-dossier URL et l'ID du service choisi
           const routeToModuleMap: { [key: string]: string } = {
             "factures": "facture",
             "stock": "stock",
@@ -57,16 +138,16 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           const requiredModuleId = routeToModuleMap[currentModule];
           
           if (requiredModuleId && !data.services_choisis.includes(requiredModuleId)) {
-            router.push("/dashboard"); // Redirection immédiate si non autorisé
+            router.push("/dashboard"); 
           }
         }
       }
       setLoading(false);
     }
-    fetchUserServices();
+    fetchUserServicesAndHydrate();
   }, [pathname, router]);
 
-  // Organisation de vos 9 choix sous forme de catégories métiers claires
+  // Organisation des catégories métiers
   const menuConfig = [
     {
       category: "Pilotage & Décision",
@@ -117,6 +198,19 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     router.push("/connexion");
   };
 
+  // Écran de chargement de l'hydratation (Aspiration de données)
+  if (loadingSync) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-100 p-6">
+        <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+        <h2 className="text-xl font-bold">Préparation de votre espace hors-ligne...</h2>
+        <p className="text-sm text-slate-400 mt-2 text-center max-w-sm">
+          Nous configurons la base de données de votre PC pour vous permettre de travailler de manière sécurisée en cas de délestage.
+        </p>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white gap-3">
@@ -140,12 +234,10 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
           <nav className="space-y-6">
             {menuConfig.map((section, sIdx) => {
-              // Filtrer les items visibles selon les droits de l'utilisateur
               const itemsVisibles = section.items.filter(
                 (item) => item.id === "always" || activeServices.includes(item.id)
               );
 
-              // Masquer complètement une catégorie si elle n'a aucun module actif pour ce client
               if (itemsVisibles.length === 0) return null;
 
               return (
@@ -179,7 +271,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           </nav>
         </div>
 
-        {/* Bouton déconnexion fixé en bas */}
         <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
           <button
             onClick={handleLogout}
@@ -197,12 +288,27 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           <div className="text-xs font-bold bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-full text-slate-600 dark:text-slate-300">
             Espace Entreprise Activé
           </div>
-          <div className="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center text-white text-xs font-bold shadow-sm">
-            GIT
+          
+          {/* Badge de connectivité anti-délestage */}
+          <div className="flex items-center gap-4">
+            <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold ${
+              isOnline 
+                ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/30" 
+                : "bg-amber-500/10 text-amber-500 border border-amber-500/30 animate-pulse"
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${isOnline ? "bg-emerald-500" : "bg-amber-500"}`}></span>
+              {isOnline ? "En ligne" : "Mode local"}
+            </div>
+
+            <div className="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center text-white text-xs font-bold shadow-sm">
+              GIT
+            </div>
           </div>
         </header>
 
-        <main className="flex-1 p-8 overflow-y-auto">{children}</main>
+        <main className="flex-1 p-8 overflow-y-auto">
+          {children}
+        </main>
       </div>
     </div>
   );

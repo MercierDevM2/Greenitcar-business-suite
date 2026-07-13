@@ -9,6 +9,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
+// 1. Le composant fonctionnel contenant votre logique
 function SaisieFormContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -18,45 +19,52 @@ function SaisieFormContent() {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [nomEntreprise, setNomEntreprise] = useState<string>("Mon Entreprise");
-
-useEffect(() => {
-  async function getAuth() {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      setUserId(user.id);
-
-      // Récupération du nom de l'entreprise depuis ta table "utilisateurs"
-      const { data: userData } = await supabase
-        .from("utilisateurs")
-        .select("nom_entreprise")
-        .eq("id", user.id)
-        .single();
-
-      if (userData?.nom_entreprise) {
-        setNomEntreprise(userData.nom_entreprise);
-      }
-    }
-  }
-  getAuth();
-}, []);
-
-
-  // États génériques pour stocker les champs des différents formulaires
   const [formData, setFormData] = useState<any>({});
+  const [anneesScolaires, setAnneesScolaires] = useState<any[]>([]);
+  const [classes, setClasses] = useState<any[]>([]);
 
+  // Unification des hooks useEffect d'authentification pour éviter les doubles appels
   useEffect(() => {
     async function getAuth() {
       const { data: { user } } = await supabase.auth.getUser();
-      if (user) setUserId(user.id);
+      if (user) {
+        setUserId(user.id);
+
+        // Récupération du nom de l'entreprise depuis la table "utilisateurs"
+        const { data: userData } = await supabase
+          .from("utilisateurs")
+          .select("nom_entreprise")
+          .eq("id", user.id)
+          .single();
+
+        if (userData?.nom_entreprise) {
+          setNomEntreprise(userData.nom_entreprise);
+        }
+      }
     }
     getAuth();
   }, []);
+
+  useEffect(() => {
+    async function chargerDonnees() {
+      // Logique de chargement des années scolaires et des classes depuis Supabase
+      try {
+        const { data: annees } = await supabase.from("gs_annees").select("*");
+        if (annees) setAnneesScolaires(annees);
+        
+        const { data: cls } = await supabase.from("gs_classes").select("*");
+        if (cls) setClasses(cls);
+      } catch (err) {
+        console.error("Erreur de chargement des options", err);
+      }
+    }
+    if (userId) chargerDonnees();
+  }, [userId]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  // Soumission et insertion dynamique dans la bonne table Supabase
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userId) return;
@@ -71,8 +79,8 @@ useEffect(() => {
         case "facture":
           tableName = "gf_factures";
           const total_ht = Number(formData.total_ht) || 0;
-          const total_ttc = total_ht; // Commerce local / HT = TTC ou géré via taxes
-          const estimation_achat = total_ht * 0.75; // Estimation de marge (75% coût d'achat)
+          const total_ttc = total_ht; 
+          const estimation_achat = total_ht * 0.75; 
           
           dataToInsert = {
             ...dataToInsert,
@@ -80,7 +88,7 @@ useEffect(() => {
             total_ht,
             total_ttc,
             benefice_realise: total_ttc - estimation_achat,
-            statut: formData.statut || "payee", // 'payee' ou 'en_attente'
+            statut: formData.statut || "payee", 
           };
           break;
 
@@ -119,7 +127,6 @@ useEffect(() => {
           break;
 
         case "school": {
-          // 1. Création de l'élève
           const { data: eleve, error: eleveError } = await supabase
               .from("gs_eleves")
               .insert({
@@ -137,7 +144,6 @@ useEffect(() => {
 
           if (eleveError) throw eleveError;
 
-          // 2. Création de l'inscription
           const { data: inscription, error: inscriptionError } = await supabase
               .from("gs_inscriptions")
               .insert({
@@ -154,7 +160,6 @@ useEffect(() => {
 
           if (inscriptionError) throw inscriptionError;
 
-          // 3. Premier paiement (facultatif)
           const acompte = Number(formData.acompte) || 0;
 
           if (acompte > 0) {
@@ -178,17 +183,17 @@ useEffect(() => {
         }
 
         case "school_enseignant": {
-        tableName = "gs_enseignants";
-        dataToInsert = {
-          ...dataToInsert,
-          nom: formData.nom_enseignant?.toUpperCase(),
-          prenom: formData.prenom_enseignant,
-          telephone: formData.telephone_enseignant,
-          email: formData.email_enseignant,
-          specialite: formData.specialite_enseignant,
-        };
-        break;
-      }
+          tableName = "gs_enseignants";
+          dataToInsert = {
+            ...dataToInsert,
+            nom: formData.nom_enseignant?.toUpperCase(),
+            prenom: formData.prenom_enseignant,
+            telephone: formData.telephone_enseignant,
+            email: formData.email_enseignant,
+            specialite: formData.specialite_enseignant,
+          };
+          break;
+        }
 
         case "clinic":
           tableName = "gc_patients_consultations";
@@ -222,7 +227,6 @@ useEffect(() => {
       }
 
       const { error } = await supabase.from(tableName).insert([dataToInsert]);
-
       if (error) throw error;
 
       setStatus({ type: "success", text: "Donnée enregistrée avec succès ! Vos KPIs sont à jour." });
@@ -235,37 +239,7 @@ useEffect(() => {
       setSaving(false);
     }
   };
-
-  const [anneesScolaires, setAnneesScolaires] = useState<any[]>([]);
-  const [classes, setClasses] = useState<any[]>([]);
-
-  useEffect(() => {
-  async function chargerDonnees() {
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const { data: annees } = await supabase
-      .from("gs_annees_scolaires")
-      .select("id, libelle")
-      .eq("utilisateur_id", user.id)
-      .order("date_debut");
-
-    const { data: listeClasses } = await supabase
-      .from("gs_classes")
-      .select("id, nom")
-      .eq("utilisateur_id", user.id)
-      .order("niveau")
-      .order("nom");
-
-    setAnneesScolaires(annees || []);
-    setClasses(listeClasses || []);
-  }
-
-  chargerDonnees();
-}, []);
-
-  return (
+return (
     <div className="max-w-xl mx-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-8 rounded-2xl shadow-sm">
       <div className="mb-6">
         <span className="text-xs font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1 rounded-md">
@@ -833,13 +807,18 @@ useEffect(() => {
           </button>
         </div>
       </form>
+      {status && (
+        <p className={`mt-4 p-2 rounded text-center ${status.type === "success" ? "bg-emerald-500/20 text-emerald-400" : "bg-rose-500/20 text-rose-400"}`}>
+          {status.text}
+        </p>
+      )}
     </div>
   );
 }
-
-export default function SaisiePage() {
+// 2. L'exportation par défaut enveloppée dans un Suspense Boundary requis par Next 16
+export default function SaisieFormPage() {
   return (
-    <Suspense fallback={<div className="text-center p-8 text-sm">Chargement du formulaire...</div>}>
+    <Suspense fallback={<div className="min-h-screen bg-slate-950 text-slate-300 flex items-center justify-center">Chargement du module...</div>}>
       <SaisieFormContent />
     </Suspense>
   );
