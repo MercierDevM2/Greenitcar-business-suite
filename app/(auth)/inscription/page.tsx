@@ -403,7 +403,7 @@ export default function InscriptionPage() {
                     name="nom_entreprise"
                     value={formData.nom_entreprise}
                     onChange={handleChange}
-                    placeholder="Ex: GreenMotors SARL"
+                    placeholder="Ex: GreenItCar"
                     className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
                   />
                   {errors.nom_entreprise && (
@@ -424,12 +424,13 @@ export default function InscriptionPage() {
                     className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
                   >
                     <option value="">Sélectionnez un secteur</option>
-                    <option value="Sante">Medecine</option>
-                    <option value="logistique">Logistique</option>
-                    <option value="business">Commerce</option>
-                    <option value="Informatique">Informatique</option>
-                    <option value="Location">Location de véhicules</option>
-                    <option value="other">Autre</option>
+                    <option value="sante_medical">Santé / Médical</option>
+                    <option value="humanitaire_ong">Humanitaire / ONG</option>
+                    <option value="commerce_vente">Commerce / Vente au détail</option>
+                    <option value="informatique_tech">Informatique / Technologies</option>
+                    <option value="administration_publique">Administration / Secteur public</option>
+                    <option value="autre">Autre</option>
+
                   </select>
                   {errors.secteur_activite && (
                     <p className="text-red-600 dark:text-red-400 text-sm mt-1">
@@ -464,7 +465,7 @@ export default function InscriptionPage() {
                     name="telephone"
                     value={formData.telephone}
                     onChange={handleChange}
-                    placeholder="+33 (0)1 23 45 67 89"
+                    placeholder="+236..."
                     className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
                   />
                   {errors.telephone && (
@@ -491,8 +492,8 @@ export default function InscriptionPage() {
                 </div>
 
                  <div>
-                  <label htmlFor="siret" className="block text-slate-800 dark:text-slate-200 text-sm font-semibold mb-2">
-                    Numéro de SIRET *
+                  <label htmlFor="numero_registre_du_commerce" className="block text-slate-800 dark:text-slate-200 text-sm font-semibold mb-2">
+                    Numéro de Registre du Commerce *
                   </label>
                   <input
                     type="text"
@@ -500,7 +501,7 @@ export default function InscriptionPage() {
                     name="numero_registre_du_commerce"
                     value={formData.numero_registre_du_commerce}
                     onChange={handleChange}
-                    placeholder="123 456 789 00012"
+                    placeholder="Entrez le numéro de registre du commerce" // Ajout des accents et d'un verbe d'action
                     className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
                   />
                   {errors.numero_registre_du_commerce && (
@@ -508,6 +509,7 @@ export default function InscriptionPage() {
                       {errors.numero_registre_du_commerce}
                     </p>
                   )}
+
                 </div>
               </div>
             </div>
@@ -531,7 +533,7 @@ export default function InscriptionPage() {
                     name="nom"
                     value={formData.nom}
                     onChange={handleChange}
-                    placeholder="Dupont"
+                    placeholder="Votre nom"
                     className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
                   />
                   {errors.nom && (
@@ -550,7 +552,7 @@ export default function InscriptionPage() {
                     name="prenom"
                     value={formData.prenom}
                     onChange={handleChange}
-                    placeholder="Jean"
+                    placeholder="Votre prénom"
                     className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
                   />
                   {errors.prenom && (

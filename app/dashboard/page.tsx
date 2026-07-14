@@ -265,7 +265,7 @@ const loadFactureData = async (userId: string) => {
   refreshSchool();
 }, [currentAnnee, userId]);
 
-    // 2. Calcul des KPIs GreenSchool
+// 2. Calcul des KPIs GreenSchool
 useEffect(() => {
   if (loading) return;
 
@@ -279,44 +279,54 @@ useEffect(() => {
     const inscriptions = rawEleves.inscriptions || [];
     const paiements = rawEleves.paiements || [];
 
-    // Filtre par classe (si utilisé)
-   const filteredInscriptions = inscriptions.filter((i: any) => {
-  if (currentClasse === "toutes") return true;
-
-   return Number(i.classe_id) === Number(currentClasse);
-});
-
-    const totalInscrits = filteredInscriptions.length;
-
-    const totalAttendu = filteredInscriptions.reduce(
-      (sum: number, i: any) => sum + Number(i.scolarite_totale || 0),
-      0
-    );
-
-    // Total payé par inscription
+    // --- ÉTAPE 1 : Pré-calculer TOUS les paiements par inscription (Indépendant des filtres) ---
     const paiementsParInscription: Record<number, number> = {};
-
     paiements.forEach((p: any) => {
       paiementsParInscription[p.inscription_id] =
         (paiementsParInscription[p.inscription_id] || 0) +
         Number(p.montant || 0);
     });
 
+    // --- ÉTAPE 2 : Filtrer d'abord STRICTEMENT par classe ---
+    const inscriptionsParClasse = inscriptions.filter((i: any) => {
+      if (currentClasse === "toutes") return true;
+      return Number(i.classe_id) === Number(currentClasse);
+    });
+
     let totalEncaisse = 0;
+    let totalAttendu = 0;
     let elevesAjour = 0;
     let elevesDebiteurs = 0;
+    let inscriptionsFinales = [];
 
-    filteredInscriptions.forEach((i: any) => {
+    // --- ÉTAPE 3 : Analyser la situation financière de chaque élève de cette classe ---
+    inscriptionsParClasse.forEach((i: any) => {
       const paye = paiementsParInscription[i.id] || 0;
+      const totalDuEleve = Number(i.scolarite_totale || 0);
 
       totalEncaisse += paye;
+      totalAttendu += totalDuEleve;
 
-      if (paye >= Number(i.scolarite_totale)) {
+      const estAjour = paye >= totalDuEleve;
+
+      if (estAjour) {
         elevesAjour++;
       } else {
         elevesDebiteurs++;
       }
+
+      // --- ÉTAPE 4 : Appliquer le filtre de statut (currentSchoolFilter = 'tous' / 'solde' / 'dette') ---
+      if (currentSchoolFilter === "tous") {
+        inscriptionsFinales.push(i);
+      } else if (currentSchoolFilter === "solde" && estAjour) {
+        inscriptionsFinales.push(i);
+      } else if (currentSchoolFilter === "dette" && !estAjour) {
+        inscriptionsFinales.push(i);
+      }
     });
+
+    // Le nombre total d'élèves affichés dépend du filtre final
+    const totalInscritsAffiches = inscriptionsFinales.length;
 
     const resteARecouvrer = totalAttendu - totalEncaisse;
 
@@ -325,26 +335,28 @@ useEffect(() => {
         ? ((totalEncaisse / totalAttendu) * 100).toFixed(1)
         : "0";
 
+    // Le panier moyen se base sur les élèves de la classe sélectionnée
+    const totalInscritsClasse = inscriptionsParClasse.length;
     const panierMoyen =
-      totalInscrits > 0
-        ? Math.round(totalAttendu / totalInscrits)
+      totalInscritsClasse > 0
+        ? Math.round(totalAttendu / totalInscritsClasse)
         : 0;
 
     const schoolKpis = [
       {
-        title: "Élèves inscrits",
-        value: totalInscrits,
+        title: "Nombre élèves",
+        value: totalInscritsAffiches,
         moduleName: "GreenSchool",
         color: "text-purple-600",
       },
       {
-        title: "Enseignants",
+        title: "Nombre enseignants",
         value: rawEleves.enseignants,
         moduleName: "GreenSchool",
         color: "text-blue-600",
       },
       {
-        title: "Classes",
+        title: "Nombre Classes",
         value: rawEleves.classes,
         moduleName: "GreenSchool",
         color: "text-cyan-600",
@@ -368,7 +380,7 @@ useEffect(() => {
         color: "text-indigo-600",
       },
       {
-        title: "Scolarité moyenne",
+        title: "Scolarité Totale",
         value: `${panierMoyen.toLocaleString("fr-FR")} FCFA`,
         moduleName: "GreenSchool",
         color: "text-slate-600",
@@ -389,7 +401,9 @@ useEffect(() => {
 
     return [...sansSchool, ...schoolKpis];
   });
-}, [currentClasse, rawEleves, activeServices, loading]);
+// Ajout de currentSchoolFilter dans les dépendances pour recalculer si le bouton change
+}, [currentClasse, currentSchoolFilter, rawEleves, activeServices, loading]);
+
 
 useEffect(() => {
   if (loading) return;
@@ -480,77 +494,78 @@ useEffect(() => {
 
   return (
   <div className="space-y-6">
-    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-4 border-b border-slate-200/60 dark:border-slate-800">
+    <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4 pb-4 border-b border-slate-200/60 dark:border-slate-800">
       <div>
         <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Vos Indicateurs Clés</h1>
         <p className="text-slate-500 text-sm mt-1">Vue d'ensemble en temps réel de vos modules actifs.</p>
       </div>
       
-      {/* BOUTON D'ACTION RAPIDE POUR LA FACTURATION */}
-      {activeServices.includes("facture") && (
-        <button
-          onClick={() => router.push("/dashboard/saisies?module=facture")}
-          className="flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-xl shadow-sm transition-colors self-start sm:self-center"
-        >
-          ➕ Nouvelle Facture
-        </button>
-      )}
+      <div className="flex flex-wrap items-center gap-4">
+        {/* BOUTON D'ACTION RAPIDE POUR LA FACTURATION */}
+        {activeServices.includes("facture") && (
+          <button
+            onClick={() => router.push("/dashboard/saisies?module=facture")}
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-xl shadow-sm transition-colors"
+          >
+            ➕ Nouvelle Facture
+          </button>
+        )}
 
-      
-      {/* Regroupement des filtres si le module school est actif */}
-      {activeServices.includes("school") && (
-        <div className="flex flex-wrap items-center gap-4">
-          {/* Filtre Année */}
-          <div className="flex items-center gap-3">
-            <label className="text-sm font-semibold text-slate-600 dark:text-slate-300">
-              📅 Année
-            </label>
-            <select
-              value={currentAnnee}
-              onChange={(e) => setCurrentAnnee(e.target.value)}
-              className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm"
+        {/* REGROUPEMENT DES FILTRES ET ACTIONS RAPIDES DU MODULE SCHOOL */}
+        {activeServices.includes("school") && (
+          <div className="flex flex-wrap items-center gap-3">
+            
+            {/* Filtre Classe */}
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-semibold text-slate-600 dark:text-slate-300">
+                🏫 Classe
+              </label>
+              <select
+                value={currentClasse}
+                onChange={(e) => setCurrentClasse(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm"
+              >
+                <option value="toutes">Toutes les classes</option>
+                {classes.map((classe: any) => (
+                  <option key={classe.id} value={classe.id}>
+                    {classe.nom}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* --- NOUVEAUX BOUTONS D'ACTION POUR LA SCOLARITÉ --- */}
+            <button
+              onClick={() => router.push("/dashboard/saisies?module=school")}
+              className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-semibold text-sm rounded-xl shadow-sm transition-colors"
             >
-              {annees.map((annee: any) => (
-                <option key={annee.id} value={annee.id}>
-                  {annee.libelle}
-                </option>
-              ))}
-            </select>
+              ➕ Inscrire Élève
+            </button>
+
+            <button
+              onClick={() => router.push("/dashboard/saisies?module=school_paiement")}
+              className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-700 text-white font-semibold text-sm rounded-xl shadow-sm transition-colors"
+            >
+              💰 Encaisser Scolarité
+            </button>
+
+            {/* Liens de navigation existants */}
             <button 
               onClick={() => router.push("/dashboard/school/eleves")}
-              className="bg-white text-blue-700 hover:bg-blue-50 px-4 py-2 rounded-lg font-semibold text-sm shadow transition-colors flex-1 sm:flex-none text-center"
+              className="bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 px-3 py-1.5 rounded-xl font-semibold text-sm shadow-sm transition-colors"
             >
-            👨‍🎓 Liste des Élèves
-          </button>
-          </div>
-
-          {/* Filtre Classe réintégré au bon endroit */}
-          <div className="flex items-center gap-3">
-            <label className="text-sm font-semibold text-slate-600 dark:text-slate-300">
-              🏫 Classe
-            </label>
-            <select
-              value={currentClasse}
-              onChange={(e) => setCurrentClasse(e.target.value)}
-              className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm"
-            >
-              <option value="toutes">Toutes les classes</option>
-              {classes.map((classe: any) => (
-                <option key={classe.id} value={classe.id}>
-                  {classe.nom}
-                </option>
-              ))}
-            </select>
+              👨‍🎓 Liste Élèves
+            </button>
 
             <button 
               onClick={() => router.push("/dashboard/school/enseignants")}
-              className="bg-blue-800 text-white hover:bg-blue-900 border border-blue-500 px-4 py-2 rounded-lg font-semibold text-sm shadow transition-colors flex-1 sm:flex-none text-center"
+              className="bg-blue-800 hover:bg-blue-900 text-white border border-blue-700 px-3 py-1.5 rounded-xl font-semibold text-sm shadow-sm transition-colors"
             >
-            👩‍🏫 Enseignants
-          </button>
+              👩‍🏫 Enseignants
+            </button>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
 
     {/* Grille unifiée de tous les KPIs (Reste identique à votre code) */}

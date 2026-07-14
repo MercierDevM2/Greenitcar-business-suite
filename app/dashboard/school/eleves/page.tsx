@@ -32,16 +32,18 @@ export default function ListeElevesPage() {
         .order("nom");
       setClasses(listeClasses || []);
 
-      // 2. Récupérer les inscriptions avec jointures (Élève + Classe)
+      // 2. Récupérer les inscriptions avec jointures monétaires
       const { data: inscriptions } = await supabase
         .from("gs_inscriptions")
         .select(`
           id,
           numero_matricule,
           scolarite_totale,
+          reduction,
           classe_id,
           gs_classes ( nom, niveau ),
-          gs_eleves ( nom, prenom, sexe, telephone_parent, nom_parent )
+          gs_eleves ( nom, prenom, sexe, telephone_parent, nom_parent ),
+          gs_paiements ( montant )
         `)
         .eq("utilisateur_id", user.id);
 
@@ -109,7 +111,7 @@ export default function ListeElevesPage() {
         </div>
       </div>
 
-      {/* Tableau des élèves */}
+      {/* Tableau des élèves épuré */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-sm">
@@ -119,7 +121,7 @@ export default function ListeElevesPage() {
                 <th className="p-4">Nom & Prénom</th>
                 <th className="p-4">Sexe</th>
                 <th className="p-4">Classe</th>
-                <th className="p-4">Responsable légal</th>
+                <th className="p-4 text-right">État financier</th>
                 <th className="p-4">Téléphone Parent</th>
               </tr>
             </thead>
@@ -131,24 +133,44 @@ export default function ListeElevesPage() {
                   </td>
                 </tr>
               ) : (
-                elevesFiltres.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="p-4 font-mono text-xs text-gray-500">
-                      {item.numero_matricule || "N/A"}
-                    </td>
-                    <td className="p-4 font-medium text-slate-900">
-                      {item.gs_eleves?.nom} {item.gs_eleves?.prenom}
-                    </td>
-                    <td className="p-4 text-xs">{item.gs_eleves?.sexe || "—"}</td>
-                    <td className="p-4">
-                      <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded text-xs font-semibold">
-                        {item.gs_classes?.nom || "Non assignée"}
-                      </span>
-                    </td>
-                    <td className="p-4 text-gray-500">{item.gs_eleves?.nom_parent || "—"}</td>
-                    <td className="p-4 font-mono text-xs">{item.gs_eleves?.telephone_parent || "—"}</td>
-                  </tr>
-                ))
+                elevesFiltres.map((item) => {
+                  // --- Calcul de la formule stricte ---
+                  const netAttendu = (Number(item.scolarite_totale) || 0) - (Number(item.reduction) || 0);
+                  const totalVerse = item.gs_paiements?.reduce((sum: number, p: any) => sum + (Number(p.montant) || 0), 0) || 0;
+                  const resteAPayer = netAttendu - totalVerse;
+
+                  return (
+                    <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="p-4 font-mono text-xs text-gray-500">
+                        {item.numero_matricule || "N/A"}
+                      </td>
+                      <td className="p-4 font-medium text-slate-900">
+                        {item.gs_eleves?.nom} {item.gs_eleves?.prenom}
+                      </td>
+                      <td className="p-4 text-xs">{item.gs_eleves?.sexe || "—"}</td>
+                      <td className="p-4">
+                        <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded text-xs font-semibold">
+                          {item.gs_classes?.nom || "Non assignée"}
+                        </span>
+                      </td>
+                      
+                      {/* COLONNE ÉTAT FINANCIER SOLDEE / RESTE */}
+                      <td className="p-4 text-right font-semibold">
+                        {resteAPayer <= 0 ? (
+                          <span className="text-xs bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 px-2.5 py-1 rounded-lg font-bold">
+                            Soldé
+                          </span>
+                        ) : (
+                          <span className="text-xs bg-rose-100 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 px-2.5 py-1 rounded-lg font-bold">
+                            Reste : {resteAPayer.toLocaleString("fr-FR")} FCFA
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="p-4 font-mono text-xs">{item.gs_eleves?.telephone_parent || "—"}</td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

@@ -14,6 +14,10 @@ function SaisieFormContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const currentModule = searchParams.get("module") || "facture";
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isOpen, setIsOpen] = useState(false);
+  const [selectedEleveName, setSelectedEleveName] = useState("");
+
 
   const [userId, setUserId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -22,6 +26,12 @@ function SaisieFormContent() {
   const [formData, setFormData] = useState<any>({});
   const [anneesScolaires, setAnneesScolaires] = useState<any[]>([]);
   const [classes, setClasses] = useState<any[]>([]);
+  const [rawEleves, setRawEleves] = useState({
+    inscriptions: [] as any[],
+    paiements: [] as any[],
+    enseignants: 0,
+    classes: 0,
+  });
 
   // Unification des hooks useEffect d'authentification pour éviter les doubles appels
   useEffect(() => {
@@ -45,21 +55,47 @@ function SaisieFormContent() {
     getAuth();
   }, []);
 
-  useEffect(() => {
-    async function chargerDonnees() {
-      // Logique de chargement des années scolaires et des classes depuis Supabase
-      try {
-        const { data: annees } = await supabase.from("gs_annees").select("*");
-        if (annees) setAnneesScolaires(annees);
-        
-        const { data: cls } = await supabase.from("gs_classes").select("*");
-        if (cls) setClasses(cls);
-      } catch (err) {
-        console.error("Erreur de chargement des options", err);
+useEffect(() => {
+  async function chargerDonnees() {
+    try {
+      // 1. Chargement des options de configuration générale
+      const { data: annees } = await supabase.from("gs_annees_scolaires").select("*");
+      if (annees) setAnneesScolaires(annees);
+      
+      const { data: cls } = await supabase.from("gs_classes").select("*");
+      if (cls) setClasses(cls);
+
+      // 2. SÉCURISÉ & FUSIONNÉ : Chargement unique avec toutes les colonnes requises
+      if (currentModule === "school_paiement") {
+        const { data: inscriptionsData, error: insError } = await supabase
+          .from("gs_inscriptions")
+          .select(`
+            id,
+            scolarite_totale,  
+            reduction,         
+            numero_matricule,
+            gs_classes ( nom ),
+            gs_eleves ( nom, prenom ),
+            gs_paiements ( montant ) 
+          `)
+          .eq("utilisateur_id", userId);
+
+        if (insError) throw insError;
+
+        // On hydrate une seule fois l'état avec les bonnes données financières
+        setRawEleves((prev) => ({
+          ...prev,
+          inscriptions: inscriptionsData || [],
+        }));
       }
+
+    } catch (err) {
+      console.error("Erreur de chargement des options et élèves", err);
     }
-    if (userId) chargerDonnees();
-  }, [userId]);
+  }
+
+  if (userId) chargerDonnees();
+}, [userId, currentModule]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -194,6 +230,35 @@ function SaisieFormContent() {
           };
           break;
         }
+
+        case "school_paiement": {
+    const montantPaiement = Number(formData.montant_paiement) || 0;
+
+    if (montantPaiement <= 0) {
+      throw new Error("Le montant du paiement doit être supérieur à 0.");
+    }
+
+    const { error: paiementScolariteError } = await supabase
+    .from("gs_paiements")
+    .insert({
+      utilisateur_id: userId,
+      inscription_id: formData.inscription_id, // L'ID de l'inscription sélectionnée
+      montant: montantPaiement,
+      mode_paiement: formData.mode_paiement || "Espèces",
+      reference: formData.reference || null,
+      type_paiement: "scolarite", // Permet de le différencier de l'acompte d'inscription
+      observation: formData.observation || "Paiement tranche scolarité",
+      date_paiement: new Date().toISOString(),
+    });
+
+  if (paiementScolariteError) throw paiementScolariteError;
+
+  setStatus({ type: "success", text: "Paiement de scolarité enregistré ! Vos KPIs sont mis à jour." });
+  setFormData({});
+  setTimeout(() => router.push("/dashboard"), 1500);
+  return;
+}
+
 
         case "clinic":
           tableName = "gc_patients_consultations";
@@ -506,6 +571,7 @@ return (
               type="text"
               name="telephone_parent"
               onChange={handleInputChange}
+              placeholder="+236..."
               className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
             />
           </div>
@@ -518,6 +584,7 @@ return (
               type="text"
               name="adresse"
               onChange={handleInputChange}
+              placeholder="Quartier"
               className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
             />
           </div>
@@ -582,7 +649,7 @@ return (
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="text-xs font-bold text-slate-500 uppercase">
-                Frais de scolarité
+                 Scolarité Annuelle
               </label>
               <input
                 required
@@ -594,15 +661,17 @@ return (
             </div>
 
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">
-                Réduction
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                Réduction / Remise (FCFA)
               </label>
               <input
                 type="number"
                 name="reduction"
-                defaultValue={0}
                 onChange={handleInputChange}
-                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+                placeholder="Ex: 50000 (0 si aucune)"
+                defaultValue={0}
+                min={0} // Évite de saisir des réductions négatives
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
               />
             </div>
           </div>
@@ -648,6 +717,7 @@ return (
             <input
               type="text"
               name="reference"
+              placeholder="Ex: Chèque N°12345, Transfert Wave, Espèces..."
               onChange={handleInputChange}
               className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
             />
@@ -742,6 +812,164 @@ return (
             </div>
           </div>
         )}
+       {/* 2. Encaisser une tranche de scolarité */}
+          {currentModule === "school_paiement" && (
+            <>
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4">
+                Encaisser une tranche de scolarité
+              </h3>
+              
+              {/* 1. Sélection de l'élève avec filtre de recherche de texte */}
+              <div className="relative mb-4">
+                <label className="block text-sm font-semibold mb-2">Sélectionner l'élève *</label>
+                
+                {/* Champ texte cliquable qui sert de filtre */}
+                <input
+                  type="text"
+                  placeholder="Nom, prénom, matricule..."
+                  value={searchQuery}
+                  onChange={(e) => {
+                    const valeur = e.target.value;
+                    setSearchQuery(valeur);
+                    // CORRECTION : On n'ouvre la liste QUE s'il y a plus de 1 caractère tapé
+                    if (valeur.trim().length >= 2) {
+                      setIsOpen(true);
+                    } else {
+                      setIsOpen(false);
+                    }
+                  }}
+                  // CORRECTION UX : Au focus, on n'ouvre plus la liste automatiquement si c'est vide
+                  onFocus={() => {
+                    if (searchQuery.trim().length >= 2) {
+                      setIsOpen(true);
+                    }
+                  }}
+                  className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+
+                {/* Liste déroulante flottante (ne s'affiche que si isOpen est vrai ET qu'on a saisi assez de lettres) */}
+                {isOpen && searchQuery.trim().length >= 2 && (
+                  <>
+                    <ul className="absolute z-50 w-full mt-1 max-h-60 overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl divide-y divide-slate-100 dark:divide-slate-800">
+                      {rawEleves.inscriptions &&
+                      rawEleves.inscriptions.filter((ins: any) => {
+                        const nom = ins.gs_eleves?.nom || "";
+                        const prenom = ins.gs_eleves?.prenom || "";
+                        const matricule = ins.numero_matricule || "";
+                        const nomComplet = `${nom} ${prenom} ${matricule}`.toLowerCase().trim();
+                        return nomComplet.includes(searchQuery.toLowerCase().trim());
+                      }).length > 0 ? (
+                        rawEleves.inscriptions
+                          .filter((ins: any) => {
+                            const nom = ins.gs_eleves?.nom || "";
+                            const prenom = ins.gs_eleves?.prenom || "";
+                            const matricule = ins.numero_matricule || "";
+                            const nomComplet = `${nom} ${prenom} ${matricule}`.toLowerCase().trim();
+                            return nomComplet.includes(searchQuery.toLowerCase().trim());
+                          })
+                          .map((ins: any) => {
+                            const netAPayer = (Number(ins.scolarite_totale) || 0) - (Number(ins.reduction) || 0);
+                            const totalDejaPaye = ins.gs_paiements?.reduce((sum: number, p: any) => sum + (Number(p.montant) || 0), 0) || 0;
+                            const resteAPayer = netAPayer - totalDejaPaye;
+
+                            return (
+                              <li
+                                key={ins.id}
+                                onClick={() => {
+                                  setFormData({ 
+                                    ...formData, 
+                                    inscription_id: ins.id,
+                                    reste_a_payer_max: resteAPayer 
+                                  });
+                                  setSearchQuery(`${ins.gs_eleves?.nom || ""} ${ins.gs_eleves?.prenom || ""} (${ins.gs_classes?.nom || "Sans classe"})`);
+                                  setIsOpen(false);
+                                }}
+                                className="px-4 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 cursor-pointer flex justify-between items-center transition-colors"
+                              >
+                                <div>
+                                  <span className="font-semibold">{ins.gs_eleves?.nom || "NOM"}</span> {ins.gs_eleves?.prenom || "Prénom"}
+                                  <span className="block text-xs text-slate-400">Classe : {ins.gs_classes?.nom || "Non spécifiée"}</span>
+                                </div>
+                                
+                                <div className="text-right">
+                                  {resteAPayer <= 0 ? (
+                                    <span className="text-xs bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 px-2.5 py-1 rounded-lg font-bold">
+                                      Scolarité Soldée
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400 px-2.5 py-1 rounded-lg font-bold">
+                                      Reste : {resteAPayer.toLocaleString("fr-FR")} FCFA
+                                    </span>
+                                  )}
+                                </div>
+                              </li>
+                            );
+                          })
+                      ) : (
+                        <li className="px-4 py-3 text-sm text-slate-500 text-center italic">
+                          Aucun élève trouvé pour cette recherche
+                        </li>
+                      )}
+                    </ul>
+                    <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
+                  </>
+                )}
+              </div>
+
+    {/* 2. Montant versé */}
+    <div className="mb-4">
+      <label className="block text-sm font-semibold mb-2">Montant du versement (FCFA) *</label>
+      <input
+        type="number"
+        name="montant_paiement"
+        required
+        placeholder="Ex: 50000"
+        onChange={handleInputChange}
+        className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+      />
+    </div>
+
+    {/* 3. Mode de paiement */}
+    <div className="mb-4">
+      <label className="block text-sm font-semibold mb-2">Mode de paiement</label>
+      <select
+        name="mode_paiement"
+        onChange={handleInputChange}
+        className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+      >
+        <option value="Espèces">Espèces</option>
+        <option value="Chèque">Chèque</option>
+        <option value="Mobile Money">Mobile Money (Wave, Orange, MTN...)</option>
+        <option value="Virement">Virement Bancaire</option>
+      </select>
+    </div>
+
+    {/* 4. Référence / Justificatif */}
+    <div className="mb-4">
+      <label className="block text-sm font-semibold mb-2">Référence du paiement (Optionnel)</label>
+      <input
+        type="text"
+        name="reference"
+        placeholder="Ex: N° Chèque, ID Transaction"
+        onChange={handleInputChange}
+        className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+      />
+    </div>
+
+    {/* 5. Date du paiement */}
+    <div className="mb-4">
+      <label className="block text-sm font-semibold mb-2">Date du paiement *</label>
+      <input
+        type="date"
+        name="date_paiement"
+        required
+        value={formData.date_paiement || new Date().toISOString().split('T')[0]}
+        onChange={handleInputChange}
+        className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+      />
+    </div>
+  </>
+)}
 
         {/* FORMULAIRE GREENCLINIC */}
         {currentModule === "clinic" && (
