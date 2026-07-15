@@ -1004,7 +1004,7 @@ return (
 
         {/* Boutons d'actions */}
         <div className="flex gap-3 pt-2">
-          <button type="button" onClick={() => router.push("/dashboard/parametres")} className="w-1/3 py-3 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+          <button type="button" onClick={() => router.push("/dashboard")} className="w-1/3 py-3 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
             Annuler
           </button>
           <button type="submit" disabled={saving} className="w-2/3 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-800 text-white rounded-xl text-sm font-bold shadow-sm transition-all">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
 import { db as baseDb } from "../lib/db";
@@ -51,254 +51,622 @@ export default function DashboardPage() {
   // 🏫 SÉCURISATION HYBRIDE : LOAD SCHOOL DATA
   // ==========================================
   const loadSchoolData = async (uid: string, anneeId: string) => {
-    try {
-      let inscriptions: any[] = [];
-      let paiements: any[] = [];
-      let listeEnseignants: any[] = [];
-      let listeClasses: any[] = [];
-      let classesCount = 0;
+  try {
+    let inscriptions: any[] = [];
+    let paiements: any[] = [];
+    let listeEnseignants: any[] = [];
+    let listeClasses: any[] = [];
+    let classesCount = 0;
 
-      if (navigator.onLine) {
-        const { data: insData } = await supabase
+    if (navigator.onLine) {
+      // ==========================
+      // CHARGEMENT PARALLÈLE
+      // ==========================
+      const [insResult, profResult, clsResult] = await Promise.all([
+        supabase
           .from("gs_inscriptions")
-          .select("id, scolarite_totale, classe_id, numero_matricule, gs_classes ( nom, niveau ), gs_eleves ( nom, prenom, telephone_parent, nom_parent )")
+          .select(`
+            id,
+            scolarite_totale,
+            classe_id,
+            numero_matricule,
+            gs_classes (
+              nom,
+              niveau
+            ),
+            gs_eleves (
+              nom,
+              prenom,
+              telephone_parent,
+              nom_parent
+            ),
+            gs_paiements (
+              inscription_id,
+              montant
+            )
+          `)
           .eq("utilisateur_id", uid)
-          .eq("annee_id", anneeId);
-        inscriptions = insData || [];
+          .eq("annee_id", anneeId),
 
-        const inscriptionIds = inscriptions.map(i => i.id);
-        if (inscriptionIds.length > 0) {
-          const { data: paiementsData } = await supabase
-            .from("gs_paiements")
-            .select("inscription_id, montant")
-            .eq("utilisateur_id", uid)
-            .in("inscription_id", inscriptionIds);
-          paiements = paiementsData || [];
-        }
+        supabase
+          .from("gs_enseignants")
+          .select("id, nom, prenom, telephone, specialite")
+          .eq("utilisateur_id", uid),
 
-        const { data: profData } = await supabase.from("gs_enseignants").select("id, nom, prenom, telephone, specialite").eq("utilisateur_id", uid);
-        listeEnseignants = profData || [];
+        supabase
+          .from("gs_classes")
+          .select("id, nom, niveau", { count: "exact" })
+          .eq("utilisateur_id", uid)
+          .eq("annee_id", anneeId)
+          .order("nom"),
+      ]);
 
-        const { count } = await supabase.from("gs_classes").select("*", { count: "exact", head: true }).eq("utilisateur_id", uid).eq("annee_id", anneeId);
-        classesCount = count || 0;
+      const insData = insResult.data || [];
 
-        const { data: clsData } = await supabase.from("gs_classes").select("id, nom").eq("utilisateur_id", uid).eq("annee_id", anneeId).order("nom");
-        listeClasses = clsData || [];
-      } else {
-        listeClasses = await db["gs_classes"].where("annee_id").equals(Number(anneeId)).toArray();
-        classesCount = listeClasses.length;
+      inscriptions = insData.map(
+        ({ gs_paiements, ...reste }: any) => reste
+      );
 
-        const inscriptionsLocales = await db["gs_inscriptions"].where("annee_id").equals(Number(anneeId)).toArray();
-        const elevesLocaux = await db["gs_eleves"].where("utilisateur_id").equals(uid).toArray();
-        const paiementsLocaux = await db["gs_paiements"].where("utilisateur_id").equals(uid).toArray();
-        listeEnseignants = await db["gs_enseignants"].where("utilisateur_id").equals(uid).toArray();
+      paiements = insData.flatMap(
+        (ins: any) => ins.gs_paiements || []
+      );
 
-        inscriptions = inscriptionsLocales.map((ins: any) => {
-          const cl = listeClasses.find((c: any) => c.id === ins.classe_id);
-          const el = elevesLocaux.find((e: any) => e.id === ins.eleve_id);
-          return {
-            ...ins,
-            gs_classes: cl ? { nom: cl.nom, niveau: cl.niveau } : null,
-            gs_eleves: el ? { nom: el.nom, prenom: el.prenom, telephone_parent: el.telephone_parent, nom_parent: el.nom_parent } : null
-          };
-        });
+      listeEnseignants = profResult.data || [];
+      listeClasses = clsResult.data || [];
+      classesCount = clsResult.count || 0;
+    } else {
+      // ==========================
+      // HORS LIGNE (DEXIE)
+      // ==========================
 
-        const insIds = inscriptions.map(i => i.id);
-        paiements = paiementsLocaux.filter((p: any) => insIds.includes(p.inscription_id));
-      }
+      const [
+        inscriptionsLocales,
+        elevesLocaux,
+        paiementsLocaux,
+        enseignantsLocaux,
+        classesLocales,
+      ] = await Promise.all([
+        db["gs_inscriptions"]
+          .where("annee_id")
+          .equals(Number(anneeId))
+          .toArray(),
 
-      setClasses(listeClasses || []);
-      setRawEleves({
-        inscriptions: inscriptions,
-        paiements: paiements,
-        enseignants: listeEnseignants.length,
-        classes: classesCount,
+        db["gs_eleves"]
+          .where("utilisateur_id")
+          .equals(uid)
+          .toArray(),
+
+        db["gs_paiements"]
+          .where("utilisateur_id")
+          .equals(uid)
+          .toArray(),
+
+        db["gs_enseignants"]
+          .where("utilisateur_id")
+          .equals(uid)
+          .toArray(),
+
+        db["gs_classes"]
+          .where("annee_id")
+          .equals(Number(anneeId))
+          .toArray(),
+      ]);
+
+      listeClasses = classesLocales;
+      classesCount = classesLocales.length;
+      listeEnseignants = enseignantsLocaux;
+
+      // Maps beaucoup plus rapides que find()
+
+      const classesMap = new Map(
+        listeClasses.map((c: any) => [c.id, c])
+      );
+
+      const elevesMap = new Map(
+        elevesLocaux.map((e: any) => [e.id, e])
+      );
+
+              inscriptions = inscriptionsLocales.map((ins: any) => {
+        // En ajoutant "as any", TypeScript accepte toutes les propriétés (nom, prenom, etc.) sans râler
+        const cl = classesMap.get(ins.classe_id) as any;
+        const el = elevesMap.get(ins.eleve_id) as any;
+
+        return {
+          ...ins,
+          gs_classes: cl
+            ? {
+                nom: cl.nom,
+                niveau: cl.niveau,
+              }
+            : null,
+          gs_eleves: el
+            ? {
+                nom: el.nom,
+                prenom: el.prenom,
+                telephone_parent: el.telephone_parent,
+                nom_parent: el.nom_parent,
+              }
+            : null,
+        };
       });
-    } catch (e) {
-      console.error("Erreur de chargement des données scolaires", e);
-    }
-  };
 
+      // Set beaucoup plus rapide que includes()
+
+      const ids = new Set(inscriptions.map((i) => i.id));
+
+      paiements = paiementsLocaux.filter((p: any) =>
+        ids.has(p.inscription_id)
+      );
+    }
+
+    setClasses(listeClasses);
+
+    setRawEleves({
+      inscriptions,
+      paiements,
+      enseignants: listeEnseignants.length,
+      classes: classesCount,
+    });
+  } catch (e) {
+    console.error("Erreur de chargement des données scolaires :", e);
+  }
+};
   // ==========================================
   // 💳 SÉCURISATION HYBRIDE : LOAD FACTURE DATA
   // ==========================================
-  const loadFactureData = async (uid: string) => {
-    try {
-      let factures: any[] = [];
-      let produits: any[] = [];
+ const loadFactureData = async (uid: string) => {
+  try {
+    let factures: any[] = [];
+    let produits: any[] = [];
 
-      if (navigator.onLine) {
-        const { data: facData } = await supabase.from("gf_factures").select("id, total_ht, total_ttc, benefice_realise, statut").eq("utilisateur_id", uid);
-        factures = facData || [];
+    if (navigator.onLine) {
 
-        const { data: prodData } = await supabase.from("gf_produits").select("id, prix_achat, stock_actuel, stock_alerte").eq("utilisateur_id", uid);
-        produits = prodData || [];
-      } else {
-        factures = await db["gf_factures"].where("utilisateur_id").equals(uid).toArray();
-        produits = await db["gf_produits"].where("utilisateur_id").equals(uid).toArray();
-      }
+      const [facturesResult, produitsResult] = await Promise.all([
 
-      const alertesCount = produits.filter(p => Number(p.stock_actuel) <= Number(p.stock_alerte)).length || 0;
-      const totalValeurStock = produits.reduce((sum, p) => sum + (Number(p.prix_achat) || 0) * (Number(p.stock_actuel) || 0), 0) || 0;
-      const totalCA = factures.reduce((sum, f) => sum + (Number(f.total_ht) || 0), 0) || 0;
-      const totalMarge = factures.reduce((sum, f) => sum + (Number(f.benefice_realise) || 0), 0) || 0;
+        supabase
+          .from("gf_factures")
+          .select("id, total_ht, total_ttc, benefice_realise, statut")
+          .eq("utilisateur_id", uid),
 
-      setRawFacturation({
-        factures: factures,
-        produits: produits,
-        alertesStock: alertesCount,
-        valeurStock: totalValeurStock,
-        chiffreAffaires: totalCA,
-        margeTotale: totalMarge,
-      });
+        supabase
+          .from("gf_produits")
+          .select("id, prix_achat, stock_actuel, stock_alerte")
+          .eq("utilisateur_id", uid),
 
-      return { alertesCount, totalValeurStock, totalCA, totalMarge };
-    } catch (e) {
-      console.error(e);
-      return { alertesCount: 0, totalValeurStock: 0, totalCA: 0, totalMarge: 0 };
+      ]);
+
+      factures = facturesResult.data || [];
+      produits = produitsResult.data || [];
+
+    } else {
+
+      const [facturesLocales, produitsLocaux] = await Promise.all([
+
+        db["gf_factures"]
+          .where("utilisateur_id")
+          .equals(uid)
+          .toArray(),
+
+        db["gf_produits"]
+          .where("utilisateur_id")
+          .equals(uid)
+          .toArray(),
+
+      ]);
+
+      factures = facturesLocales;
+      produits = produitsLocaux;
     }
-  };
+
+    const alertesCount = produits.filter(
+      (p: any) =>
+        Number(p.stock_actuel) <= Number(p.stock_alerte)
+    ).length;
+
+    const totalValeurStock = produits.reduce(
+      (sum: number, p: any) =>
+        sum +
+        (Number(p.prix_achat) || 0) *
+        (Number(p.stock_actuel) || 0),
+      0
+    );
+
+    const totalCA = factures.reduce(
+      (sum: number, f: any) =>
+        sum + (Number(f.total_ht) || 0),
+      0
+    );
+
+    const totalMarge = factures.reduce(
+      (sum: number, f: any) =>
+        sum + (Number(f.benefice_realise) || 0),
+      0
+    );
+
+    setRawFacturation({
+      factures,
+      produits,
+      alertesStock: alertesCount,
+      valeurStock: totalValeurStock,
+      chiffreAffaires: totalCA,
+      margeTotale: totalMarge,
+    });
+
+    return {
+      alertesCount,
+      totalValeurStock,
+      totalCA,
+      totalMarge,
+    };
+
+  } catch (e) {
+
+    console.error(e);
+
+    return {
+      alertesCount: 0,
+      totalValeurStock: 0,
+      totalCA: 0,
+      totalMarge: 0,
+    };
+  }
+};
 
   // ==========================================
-  // 📊 CALCUL ET AGREGATION DES COMPTEURS (SORTIE DE L'EFFET)
+  // ⚡ ORCHESTRATION DU DASHBOARD (FAST FALLBACK)
   // ==========================================
-  const calculerKpisLocaux = useCallback(async (uid: string, activeServices: string[]) => {
-    let localKpis: KpiCard[] = [];
+  useEffect(() => {
+    async function buildSmartDashboard() {
+      let activeUid: string | null = null;
+      let services: string[] = [];
 
-    // -- GREENFACTURE & GREENSTOCK --
-    if (activeServices.includes("facture") || activeServices.includes("stock")) {
-      // Déclenche le chargement et récupère les calculs frais
-      const dataCommerce = await loadFactureData(uid);
+      try {
+        const utilisateursLocaux = await db["utilisateurs"].limit(1).toArray();
+        if (utilisateursLocaux && utilisateursLocaux.length > 0) {
+          activeUid = utilisateursLocaux[0].id;
+          services = utilisateursLocaux[0].services_choisis || [];
+          
+          setUserId(activeUid!);
+          setActiveServices(services);
+          await calculerKpisLocaux(activeUid!, services);
+        }
+      } catch (err) {
+        console.log("Erreur lecture initiale Dexie Dashboard", err);
+      }
 
-      if (activeServices.includes("facture")) {
-        localKpis.push({ 
-          title: "Chiffre d'Affaires HT", 
-          value: `${dataCommerce.totalCA.toLocaleString()} FCFA`, 
-          moduleName: "GreenFacture", 
-          color: "text-emerald-600" 
+      if (navigator.onLine) {
+        (async () => {
+          try {
+            const { data: { user }, error } = await supabase.auth.getUser();
+            if (!error && user) {
+              activeUid = user.id;
+              const { data: userData } = await supabase.from("utilisateurs").select("services_choisis").eq("id", user.id).single();
+              
+              if (userData?.services_choisis) {
+                services = userData.services_choisis;
+                setActiveServices(services);
+                await calculerKpisLocaux(activeUid, services);
+              }
+            }
+          } catch (netError) {
+            console.log("Mode déconnecté en arrière-plan.");
+          } finally {
+            setLoading(false);
+          }
+        })();
+      } else {
+        setLoading(false);
+      }
+    }
+
+    // ==========================================
+    // 📊 CALCUL ET AGREGATION DES COMPTEURS (DEXIE/CLOUD)
+    // ==========================================
+    async function calculerKpisLocaux(uid: string, activeServices: string[]) {
+  const localKpis: KpiCard[] = [];
+
+  const tasks: Promise<any>[] = [];
+
+  // =========================
+  // GREENFACTURE / GREENSTOCK
+  // =========================
+  if (
+    activeServices.includes("facture") ||
+    activeServices.includes("stock")
+  ) {
+    tasks.push(
+      (async () => {
+        const dataCommerce = await loadFactureData(uid);
+
+        if (activeServices.includes("facture")) {
+          localKpis.push(
+            {
+              title: "Chiffre d'Affaires HT",
+              value: `${dataCommerce.totalCA.toLocaleString()} FCFA`,
+              moduleName: "GreenFacture",
+              color: "text-emerald-600",
+            },
+            {
+              title: "Marge brute réalisée",
+              value: `${dataCommerce.totalMarge.toLocaleString()} FCFA`,
+              moduleName: "GreenFacture",
+              color: "text-sky-600",
+            }
+          );
+        }
+
+        if (activeServices.includes("stock")) {
+          localKpis.push(
+            {
+              title: "Valeur du Stock (Achat)",
+              value: `${dataCommerce.totalValeurStock.toLocaleString()} FCFA`,
+              moduleName: "GreenStock",
+              color: "text-indigo-600",
+            },
+            {
+              title: "Articles en alerte stock",
+              value: dataCommerce.alertesCount,
+              moduleName: "GreenStock",
+              color: "text-rose-600",
+            }
+          );
+        }
+      })()
+    );
+  }
+
+  // =========================
+  // GREENPERSONNEL
+  // =========================
+  if (activeServices.includes("personnel")) {
+    tasks.push(
+      (async () => {
+        let staffCount = 0;
+
+        if (navigator.onLine) {
+          const { count } = await supabase
+            .from("gp_employes")
+            .select("*", { count: "exact", head: true })
+            .eq("utilisateur_id", uid);
+
+          staffCount = count || 0;
+        } else {
+          staffCount = await db["gp_employes"]
+            .where("utilisateur_id")
+            .equals(uid)
+            .count();
+        }
+
+        localKpis.push({
+          title: "Effectif Total",
+          value: staffCount,
+          moduleName: "GreenPersonnel",
+          color: "text-blue-600",
         });
-        localKpis.push({ 
-          title: "Marge brute réalisée", 
-          value: `${dataCommerce.totalMarge.toLocaleString()} FCFA`, 
-          moduleName: "GreenFacture", 
-          color: "text-sky-600" 
+      })()
+    );
+  }
+
+  // =========================
+  // GREENASSET
+  // =========================
+  if (activeServices.includes("asset")) {
+    tasks.push(
+      (async () => {
+        let assetsCount = 0;
+        let brokenCount = 0;
+
+        if (navigator.onLine) {
+          const [assetsResult, brokenResult] = await Promise.all([
+            supabase
+              .from("ga_patrimoine")
+              .select("*", { count: "exact", head: true })
+              .eq("utilisateur_id", uid),
+
+            supabase
+              .from("ga_patrimoine")
+              .select("*", { count: "exact", head: true })
+              .eq("utilisateur_id", uid)
+              .eq("statut_maintenance", "En panne"),
+          ]);
+
+          assetsCount = assetsResult.count || 0;
+          brokenCount = brokenResult.count || 0;
+        } else {
+          const [assets, broken] = await Promise.all([
+            db["ga_patrimoine"]
+              .where("utilisateur_id")
+              .equals(uid)
+              .count(),
+
+            db["ga_patrimoine"]
+              .where("utilisateur_id")
+              .equals(uid)
+              .filter((item: any) => item.statut_maintenance === "En panne")
+              .count(),
+          ]);
+
+          assetsCount = assets;
+          brokenCount = broken;
+        }
+
+        localKpis.push(
+          {
+            title: "Équipements Inventoriés",
+            value: assetsCount,
+            moduleName: "GreenAsset",
+            color: "text-slate-700",
+          },
+          {
+            title: "Matériels en Panne",
+            value: brokenCount,
+            moduleName: "GreenAsset",
+            color: "text-rose-600",
+          }
+        );
+      })()
+    );
+  }
+
+  // =========================
+  // GREENCLINIC
+  // =========================
+  if (activeServices.includes("clinic")) {
+    tasks.push(
+      (async () => {
+        let consultsCount = 0;
+
+        if (navigator.onLine) {
+          const { count } = await supabase
+            .from("gc_patients_consultations")
+            .select("*", { count: "exact", head: true })
+            .eq("utilisateur_id", uid)
+            .eq("type_evenement", "consultation_terminee");
+
+          consultsCount = count || 0;
+        } else {
+          consultsCount = await db["gc_patients_consultations"]
+            .where("utilisateur_id")
+            .equals(uid)
+            .filter(
+              (item: any) =>
+                item.type_evenement === "consultation_terminee"
+            )
+            .count();
+        }
+
+        localKpis.push({
+          title: "Consultations Effectuées",
+          value: consultsCount,
+          moduleName: "GreenClinic",
+          color: "text-cyan-600",
         });
-      }
+      })()
+    );
+  }
 
-      if (activeServices.includes("stock")) {
-        localKpis.push({ 
-          title: "Valeur du Stock (Achat)", 
-          value: `${dataCommerce.totalValeurStock.toLocaleString()} FCFA`, 
-          moduleName: "GreenStock", 
-          color: "text-indigo-600" 
+  // =========================
+  // GREENPOINTAGE
+  // =========================
+  if (activeServices.includes("pointage")) {
+    tasks.push(
+      (async () => {
+        const dateDuJour = new Date().toISOString().split("T")[0];
+        let latesCount = 0;
+
+        if (navigator.onLine) {
+          const { count } = await supabase
+            .from("gpt_pointages")
+            .select("*", { count: "exact", head: true })
+            .eq("utilisateur_id", uid)
+            .eq("est_en_retard", true)
+            .eq("date_jour", dateDuJour);
+
+          latesCount = count || 0;
+        } else {
+          latesCount = await db["gpt_pointages"]
+            .where("utilisateur_id")
+            .equals(uid)
+            .filter(
+              (item: any) =>
+                item.est_en_retard === true &&
+                item.date_jour === dateDuJour
+            )
+            .count();
+        }
+
+        localKpis.push({
+          title: "Retards Aujourd'hui",
+          value: latesCount,
+          moduleName: "GreenPointage",
+          color: "text-orange-600",
         });
-        localKpis.push({ 
-          title: "Articles en alerte stock", 
-          value: dataCommerce.alertesCount, 
-          moduleName: "GreenStock", 
-          color: "text-rose-600" 
+      })()
+    );
+  }
+
+  // =========================
+  // DATA / ARCHIVE
+  // =========================
+  if (
+    activeServices.includes("data") ||
+    activeServices.includes("archive")
+  ) {
+    tasks.push(
+      (async () => {
+        let totalDocsCount = 0;
+
+        if (navigator.onLine) {
+          const { count } = await supabase
+            .from("gd_missions_archives")
+            .select("*", { count: "exact", head: true })
+            .eq("utilisateur_id", uid);
+
+          totalDocsCount = count || 0;
+        } else {
+          totalDocsCount = await db["gd_missions_archives"]
+            .where("utilisateur_id")
+            .equals(uid)
+            .count();
+        }
+
+        localKpis.push({
+          title: "Éléments Traités / Sécurisés",
+          value: totalDocsCount,
+          moduleName: "Business Data",
+          color: "text-violet-600",
         });
-      }
-    }
+      })()
+    );
+  }
 
-    // --- MODULE RESSOURCES HUMAINES (GREENPERSONNEL) ---
-    if (activeServices.includes("personnel")) {
-      let staffCount = 0;
-      if (navigator.onLine) {
-        const { count } = await supabase.from("gp_employes").select("*", { count: "exact", head: true }).eq("utilisateur_id", uid);
-        staffCount = count || 0;
-      } else {
-        staffCount = await (db as any)["gp_employes"].where("utilisateur_id").equals(uid).count();
-      }
-      localKpis.push({ title: "Effectif Total", value: staffCount, moduleName: "GreenPersonnel", color: "text-blue-600" });
-    }
+  // =========================
+  // GREENSCHOOL
+  // =========================
+  if (activeServices.includes("school")) {
+    tasks.push(
+      (async () => {
+        let listeAnnees: any[] = [];
 
-    // -- GREENASSET --
-    if (activeServices.includes("asset")) {
-      let assetsCount = 0;
-      let brokenCount = 0;
+        if (navigator.onLine) {
+          const { data } = await supabase
+            .from("gs_annees_scolaires")
+            .select("id, libelle, active")
+            .eq("utilisateur_id", uid)
+            .order("id", { ascending: false });
 
-      if (navigator.onLine) {
-        const { count: assets } = await supabase.from("ga_patrimoine").select("*", { count: "exact", head: true }).eq("utilisateur_id", uid);
-        const { count: broken } = await supabase.from("ga_patrimoine").select("*", { count: "exact", head: true }).eq("utilisateur_id", uid).eq("statut_maintenance", "En panne");
-        assetsCount = assets || 0;
-        brokenCount = broken || 0;
-      } else {
-        assetsCount = await (db as any)["ga_patrimoine"].where("utilisateur_id").equals(uid).count();
-        brokenCount = await (db as any)["ga_patrimoine"].where("utilisateur_id").equals(uid).filter((item: any) => item.statut_maintenance === "En panne").count();
-      }
-      
-      localKpis.push({ title: "Équipements Inventoriés", value: assetsCount, moduleName: "GreenAsset", color: "text-slate-700" });
-      localKpis.push({ title: "Matériels en Panne", value: brokenCount, moduleName: "GreenAsset", color: "text-rose-600" });
-    }
+          listeAnnees = data || [];
+        } else {
+          listeAnnees = await db["gs_annees_scolaires"]
+            .where("utilisateur_id")
+            .equals(uid)
+            .toArray();
+        }
 
-    // -- GREENCLINIC --
-    if (activeServices.includes("clinic")) {
-      let consultsCount = 0;
-      if (navigator.onLine) {
-        const { count: consults } = await supabase.from("gc_patients_consultations").select("*", { count: "exact", head: true }).eq("utilisateur_id", uid).eq("type_evenement", "consultation_terminee");
-        consultsCount = consults || 0;
-      } else {
-        consultsCount = await (db as any)["gc_patients_consultations"].where("utilisateur_id").equals(uid).filter((item: any) => item.type_evenement === "consultation_terminee").count();
-      }
-      localKpis.push({ title: "Consultations Effectuées", value: consultsCount, moduleName: "GreenClinic", color: "text-cyan-600" });
-    }
+        if (listeAnnees.length > 0) {
+          setAnnees(listeAnnees);
 
-    // -- GREENPOINTAGE --
-    if (activeServices.includes("pointage")) {
-      let latesCount = 0;
-      const dateDuJour = new Date().toISOString().split('T')[0];
+          const active =
+            listeAnnees.find((a: any) => a.active) ||
+            listeAnnees[0];
 
-      if (navigator.onLine) {
-        const { count: lates } = await supabase.from("gpt_pointages").select("*", { count: "exact", head: true }).eq("utilisateur_id", uid).eq("est_en_retard", true).eq("date_jour", dateDuJour);
-        latesCount = lates || 0;
-      } else {
-        latesCount = await (db as any)["gpt_pointages"].where("utilisateur_id").equals(uid).filter((item: any) => item.est_en_retard === true && item.date_jour === dateDuJour).count();
-      }
-      localKpis.push({ title: "Retards Aujourd'hui", value: latesCount, moduleName: "GreenPointage", color: "text-orange-600" });
-    }
+          setCurrentAnnee(active.id.toString());
 
-    // -- GREENDATA & ARCHIVE --
-    if (activeServices.includes("data") || activeServices.includes("archive")) {
-      let totalDocsCount = 0;
-      if (navigator.onLine) {
-        const { count: totalDocs } = await supabase.from("gd_missions_archives").select("*", { count: "exact", head: true }).eq("utilisateur_id", uid);
-        totalDocsCount = totalDocs || 0;
-      } else {
-        totalDocsCount = await (db as any)["gd_missions_archives"].where("utilisateur_id").equals(uid).count();
-      }
-      localKpis.push({ title: "Éléments Traités / Sécurisés", value: totalDocsCount, moduleName: "Business Data", color: "text-violet-600" });
-    }
+          await loadSchoolData(uid, active.id);
+        }
+      })()
+    );
+  }
 
-       // -- GREENSCHOOL --
-    if (activeServices.includes("school")) {
-      let listeAnnees: any[] = [];
+  // ⚡ ATTEND TOUS LES MODULES EN PARALLÈLE
+  await Promise.all(tasks);
 
-      if (navigator.onLine) {
-        const { data } = await supabase
-          .from("gs_annees_scolaires")
-          .select("id, libelle, active")
-          .eq("utilisateur_id", uid)
-          .order("id", { ascending: false });
-        listeAnnees = data || [];
-      } else {
-        listeAnnees = await (db as any)["gs_annees_scolaires"].where("utilisateur_id").equals(uid).toArray();
-      }
+  // ⚡ UN SEUL RENDER REACT
+  setKpis(localKpis);
+}
 
-      if (listeAnnees && listeAnnees.length > 0) {
-        setAnnees(listeAnnees);
-        const active = listeAnnees.find((a: any) => a.active) || listeAnnees[0];
-        setCurrentAnnee(active.id.toString());
-        
-        // 🌟 Correction : Conversion en string pour correspondre au typage de loadSchoolData
-        await loadSchoolData(uid, active.id.toString());
-      }
-    }
-    
-    // 🌟 Écriture définitive dans votre état React principal pour afficher les cartes
-    setKpis(localKpis);
-  }, [loadSchoolData]); // 🌟 Fermeture propre du useCallback de calculerKpisLocaux
-
+  buildSmartDashboard();
+}, []);
 
   
   useEffect(() => {
