@@ -3,7 +3,7 @@ import Dexie from 'dexie';
 export const db = new Dexie('GreenItCarDB');
 
 // Définition de la structure de la base locale (V1)
-// Note : Dexie n'a besoin que de l'indexation de la clé primaire et des champs de recherche (Ex: utilisateur_id)
+// Note : Dexie n'a besoin que de l'indexation de la clé primaire et des champs de recherche
 db.version(1).stores({
   // Table Profil / Session utilisateur
   utilisateurs: 'id, email, services_choisis, nom_entreprise',
@@ -20,6 +20,13 @@ db.version(1).stores({
   gs_paiements: 'id, utilisateur_id, inscription_id, montant, statut_synchro',
   gs_enseignants: 'id, utilisateur_id, nom, statut_synchro',
 
-  securite_licence: 'id, derniere_date_vue, heures_travaillees'
+  // --- 🚨 AJOUTS REQUIS POUR LES AUTRES MODULES DU DASHBOARD ---
+  gp_employes: 'id, utilisateur_id, statut_synchro',
+  ga_patrimoine: 'id, utilisateur_id, statut_maintenance, statut_synchro',
+  gc_patients_consultations: 'id, utilisateur_id, type_evenement, statut_synchro',
+  gpt_pointages: 'id, utilisateur_id, est_en_retard, date_jour, statut_synchro',
+  gd_missions_archives: 'id, utilisateur_id, statut_synchro',
 
+  // Security & Licence
+  securite_licence: 'id, derniere_date_vue, heures_travaillees'
 });

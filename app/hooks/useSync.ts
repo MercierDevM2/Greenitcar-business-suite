@@ -6,7 +6,6 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-// Cette ligne force TypeScript à accepter toutes les tables dynamiques (gf_factures, gf_produits, etc.)
 const db = baseDb as any;
 
 export async function declencherSynchronisation() {
@@ -18,7 +17,9 @@ export async function declencherSynchronisation() {
     const facturesAEnvoyer = await db.gf_factures.where('statut_synchro').equals('local').toArray();
     for (const facture of facturesAEnvoyer) {
       await db.gf_factures.update(facture.id, { statut_synchro: 'en_cours' });
-      const { error } = await supabase.from("gf_factures").insert([{
+      
+      // .upsert() à la place de .insert() évite le crash en cas de doublon
+      const { error } = await supabase.from("gf_factures").upsert({
         id: facture.id,
         utilisateur_id: facture.utilisateur_id,
         client_nom: facture.client_nom,
@@ -26,8 +27,10 @@ export async function declencherSynchronisation() {
         benefice_realise: facture.benefice_realise,
         statut: facture.statut,
         created_at: facture.cree_le
-      }]);
+      });
+      
       if (error) {
+        console.error("Échec d'envoi facture:", error.message);
         await db.gf_factures.update(facture.id, { statut_synchro: 'local' });
         continue;
       }
@@ -40,7 +43,8 @@ export async function declencherSynchronisation() {
     const produitsAEnvoyer = await db.gf_produits.where('statut_synchro').equals('local').toArray();
     for (const prod of produitsAEnvoyer) {
       await db.gf_produits.update(prod.id, { statut_synchro: 'en_cours' });
-      const { error } = await supabase.from("gf_produits").insert([{
+      
+      const { error } = await supabase.from("gf_produits").upsert({
         id: prod.id,
         utilisateur_id: prod.utilisateur_id,
         nom: prod.nom,
@@ -48,8 +52,13 @@ export async function declencherSynchronisation() {
         prix_vente: prod.prix_vente,
         stock_actuel: prod.stock_actuel,
         stock_alerte: prod.stock_alerte
-      }]);
-      if (error) { await db.gf_produits.update(prod.id, { statut_synchro: 'local' }); continue; }
+      });
+      
+      if (error) { 
+        console.error("Échec d'envoi produit:", error.message);
+        await db.gf_produits.update(prod.id, { statut_synchro: 'local' }); 
+        continue; 
+      }
       await db.gf_produits.update(prod.id, { statut_synchro: 'synonise' });
     }
   } catch (err) { console.error("Erreur synchro stock:", err); }
@@ -59,7 +68,8 @@ export async function declencherSynchronisation() {
     const elevesAEnvoyer = await db.gs_eleves.where('statut_synchro').equals('local').toArray();
     for (const eleve of elevesAEnvoyer) {
       await db.gs_eleves.update(eleve.id, { statut_synchro: 'en_cours' });
-      const { error } = await supabase.from("gs_eleves").insert([{
+      
+      const { error } = await supabase.from("gs_eleves").upsert({
         id: eleve.id,
         utilisateur_id: eleve.utilisateur_id,
         nom: eleve.nom,
@@ -69,8 +79,13 @@ export async function declencherSynchronisation() {
         nom_parent: eleve.nom_parent,
         telephone_parent: eleve.telephone_parent,
         adresse: eleve.adresse
-      }]);
-      if (error) { await db.gs_eleves.update(eleve.id, { statut_synchro: 'local' }); continue; }
+      });
+      
+      if (error) { 
+        console.error("Échec d'envoi élève:", error.message);
+        await db.gs_eleves.update(eleve.id, { statut_synchro: 'local' }); 
+        continue; 
+      }
       await db.gs_eleves.update(eleve.id, { statut_synchro: 'synonise' });
     }
   } catch (err) { console.error("Erreur synchro élèves:", err); }
@@ -80,7 +95,8 @@ export async function declencherSynchronisation() {
     const inscriptionsAEnvoyer = await db.gs_inscriptions.where('statut_synchro').equals('local').toArray();
     for (const ins of inscriptionsAEnvoyer) {
       await db.gs_inscriptions.update(ins.id, { statut_synchro: 'en_cours' });
-      const { error } = await supabase.from("gs_inscriptions").insert([{
+      
+      const { error } = await supabase.from("gs_inscriptions").upsert({
         id: ins.id,
         utilisateur_id: ins.utilisateur_id,
         annee_id: ins.annee_id,
@@ -89,8 +105,13 @@ export async function declencherSynchronisation() {
         numero_matricule: ins.numero_matricule,
         scolarite_totale: ins.scolarite_totale,
         reduction: ins.reduction
-      }]);
-      if (error) { await db.gs_inscriptions.update(ins.id, { statut_synchro: 'local' }); continue; }
+      });
+      
+      if (error) { 
+        console.error("Échec d'envoi inscription:", error.message);
+        await db.gs_inscriptions.update(ins.id, { statut_synchro: 'local' }); 
+        continue; 
+      }
       await db.gs_inscriptions.update(ins.id, { statut_synchro: 'synonise' });
     }
   } catch (err) { console.error("Erreur synchro inscriptions:", err); }
@@ -100,15 +121,21 @@ export async function declencherSynchronisation() {
     const paiementsAEnvoyer = await db.gs_paiements.where('statut_synchro').equals('local').toArray();
     for (const paiement of paiementsAEnvoyer) {
       await db.gs_paiements.update(paiement.id, { statut_synchro: 'en_cours' });
-      const { error } = await supabase.from("gs_paiements").insert([{
+      
+      const { error } = await supabase.from("gs_paiements").upsert({
         id: paiement.id,
         utilisateur_id: paiement.utilisateur_id,
         inscription_id: paiement.inscription_id,
         montant: paiement.montant,
         mode_paiement: paiement.mode_paiement,
         reference: paiement.reference
-      }]);
-      if (error) { await db.gs_paiements.update(paiement.id, { statut_synchro: 'local' }); continue; }
+      });
+      
+      if (error) { 
+        console.error("Échec d'envoi paiement:", error.message);
+        await db.gs_paiements.update(paiement.id, { statut_synchro: 'local' }); 
+        continue; 
+      }
       await db.gs_paiements.update(paiement.id, { statut_synchro: 'synonise' });
     }
   } catch (err) { console.error("Erreur synchro paiements:", err); }
@@ -118,7 +145,8 @@ export async function declencherSynchronisation() {
     const enseignantsAEnvoyer = await db.gs_enseignants.where('statut_synchro').equals('local').toArray();
     for (const ens of enseignantsAEnvoyer) {
       await db.gs_enseignants.update(ens.id, { statut_synchro: 'en_cours' });
-      const { error } = await supabase.from("gs_enseignants").insert([{
+      
+      const { error } = await supabase.from("gs_enseignants").upsert({
         id: ens.id,
         utilisateur_id: ens.utilisateur_id,
         nom: ens.nom,
@@ -126,8 +154,13 @@ export async function declencherSynchronisation() {
         telephone: ens.telephone,
         email: ens.email,
         specialite: ens.specialite
-      }]);
-      if (error) { await db.gs_enseignants.update(ens.id, { statut_synchro: 'local' }); continue; }
+      });
+      
+      if (error) { 
+        console.error("Échec d'envoi enseignant:", error.message);
+        await db.gs_enseignants.update(ens.id, { statut_synchro: 'local' }); 
+        continue; 
+      }
       await db.gs_enseignants.update(ens.id, { statut_synchro: 'synonise' });
     }
   } catch (err) { console.error("Erreur synchro enseignants:", err); }

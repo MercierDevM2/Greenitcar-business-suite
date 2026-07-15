@@ -3,13 +3,14 @@
 import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
+import { db as baseDb } from "../../lib/db";
 
+const db = baseDb as any;
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-// 1. Le composant fonctionnel contenant votre logique
 function SaisieFormContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -17,7 +18,6 @@ function SaisieFormContent() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
   const [selectedEleveName, setSelectedEleveName] = useState("");
-
 
   const [userId, setUserId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -33,69 +33,115 @@ function SaisieFormContent() {
     classes: 0,
   });
 
-  // Unification des hooks useEffect d'authentification pour éviter les doubles appels
-  useEffect(() => {
-    async function getAuth() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setUserId(user.id);
+  // Authentification et fallback cache local
+useEffect(() => {
+  async function getAuth() {
+    let activeUid: string | null = null;
 
-        // Récupération du nom de l'entreprise depuis la table "utilisateurs"
-        const { data: userData } = await supabase
-          .from("utilisateurs")
-          .select("nom_entreprise")
-          .eq("id", user.id)
-          .single();
+    // 1. TENTATIVE SÉCURISÉE SUR SUPABASE
+    try {
+      if (navigator.onLine) {
+        const { data: { user }, error } = await supabase.auth.getUser();
+        if (!error && user) {
+          activeUid = user.id;
+          
+          // Sauvegarde ou mise à jour de l'utilisateur en local pour le mode hors-ligne
+          const { data: userData } = await supabase
+            .from("utilisateurs")
+            .select("nom_entreprise")
+            .eq("id", user.id)
+            .single();
 
-        if (userData?.nom_entreprise) {
-          setNomEntreprise(userData.nom_entreprise);
+          if (userData?.nom_entreprise) {
+            setNomEntreprise(userData.nom_entreprise);
+            await db.utilisateurs.put({
+              id: user.id,
+              nom_entreprise: userData.nom_entreprise
+            });
+          }
         }
       }
+    } catch (netError) {
+      console.log("Supabase Auth inaccessible (Mode hors-ligne), bascule sur Dexie...");
     }
-    getAuth();
-  }, []);
 
-useEffect(() => {
-  async function chargerDonnees() {
-    try {
-      // 1. Chargement des options de configuration générale
-      const { data: annees } = await supabase.from("gs_annees_scolaires").select("*");
-      if (annees) setAnneesScolaires(annees);
-      
-      const { data: cls } = await supabase.from("gs_classes").select("*");
-      if (cls) setClasses(cls);
-
-      // 2. SÉCURISÉ & FUSIONNÉ : Chargement unique avec toutes les colonnes requises
-      if (currentModule === "school_paiement") {
-        const { data: inscriptionsData, error: insError } = await supabase
-          .from("gs_inscriptions")
-          .select(`
-            id,
-            scolarite_totale,  
-            reduction,         
-            numero_matricule,
-            gs_classes ( nom ),
-            gs_eleves ( nom, prenom ),
-            gs_paiements ( montant ) 
-          `)
-          .eq("utilisateur_id", userId);
-
-        if (insError) throw insError;
-
-        // On hydrate une seule fois l'état avec les bonnes données financières
-        setRawEleves((prev) => ({
-          ...prev,
-          inscriptions: inscriptionsData || [],
-        }));
+    // 2. REPLI SUR DEXIE SI SUPABASE A ÉCHOUÉ OU SI ON EST HORS-LIGNE
+    if (!activeUid) {
+      try {
+        const utilisateursLocaux = await db.utilisateurs.limit(1).toArray();
+        if (utilisateursLocaux && utilisateursLocaux.length > 0) {
+          activeUid = utilisateursLocaux[0].id;
+          setNomEntreprise(utilisateursLocaux[0].nom_entreprise || "Mon Entreprise Locale");
+          console.log("Utilisateur local récupéré depuis Dexie :", activeUid);
+        }
+      } catch (dexieError) {
+        console.error("Impossible de lire la table utilisateurs dans Dexie", dexieError);
       }
+    }
 
-    } catch (err) {
-      console.error("Erreur de chargement des options et élèves", err);
+    // 3. ENREGISTREMENT DE L'ID UTILISATEUR RETROUVÉ
+    if (activeUid) {
+      setUserId(activeUid);
     }
   }
 
-  if (userId) chargerDonnees();
-}, [userId, currentModule]);
+  getAuth();
+}, []);
+
+  // Chargement hybride (Dexie en priorité pour le mode hors-ligne)
+  useEffect(() => {
+    async function chargerDonnees() {
+      try {
+        // 1. Lire Dexie en premier (Garantit le fonctionnement déconnecté)
+        const anneesLocales = await db.gs_annees_scolaires.toArray();
+        setAnneesScolaires(anneesLocales);
+        
+        const classesLocales = await db.gs_classes.toArray();
+        setClasses(classesLocales);
+
+        if (currentModule === "school_paiement") {
+          const inscriptionsLocales = await db.gs_inscriptions.where("utilisateur_id").equals(userId).toArray();
+          const elevesLocaux = await db.gs_eleves.where("utilisateur_id").equals(userId).toArray();
+          const paiementsLocaux = await db.gs_paiements.where("utilisateur_id").equals(userId).toArray();
+
+          const UIComputed = inscriptionsLocales.map((ins: any) => {
+          // Ajout du type (: any) sur chaque paramètre pour calmer le compilateur
+          const cl = classesLocales.find((c: any) => c.id === ins.classe_id);
+          const el = elevesLocaux.find((e: any) => e.id === ins.eleve_id);
+          const pm = paiementsLocaux.filter((p: any) => p.inscription_id === ins.id);
+
+          return {
+            ...ins,
+            // Utilisation d'une sécurité optionnelle (?.) au cas où la classe ou l'élève n'existe pas localement
+            gs_classes: cl ? { nom: cl.nom } : null,
+            gs_eleves: el ? { nom: el.nom, prenom: el.prenom } : null,
+            gs_paiements: (pm || []).map((p: any) => ({ montant: p.montant }))
+          };
+        });
+
+          setRawEleves((prev) => ({ ...prev, inscriptions: UIComputed }));
+        }
+
+        // 2. Si connecté : rafraîchir discrètement les options depuis le Cloud
+        if (navigator.onLine) {
+          const { data: annees } = await supabase.from("gs_annees_scolaires").select("*");
+          if (annees) {
+            await db.gs_annees_scolaires.bulkPut(annees.map((a: any) => ({ ...a, statut_synchro: "synchronise" })));
+            setAnneesScolaires(annees);
+          }
+          const { data: cls } = await supabase.from("gs_classes").select("*");
+          if (cls) {
+            await db.gs_classes.bulkPut(cls.map((c: any) => ({ ...c, statut_synchro: "synchronise" })));
+            setClasses(cls);
+          }
+        }
+      } catch (err) {
+        console.error("Erreur de chargement des options", err);
+      }
+    }
+
+    if (userId) chargerDonnees();
+  }, [userId, currentModule]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -108,204 +154,135 @@ useEffect(() => {
     setStatus(null);
 
     let tableName = "";
-    let dataToInsert: any = { utilisateur_id: userId };
+    let localData: any = { id: crypto.randomUUID(), utilisateur_id: userId, statut_synchro: "local" };
 
     try {
       switch (currentModule) {
         case "facture":
           tableName = "gf_factures";
           const total_ht = Number(formData.total_ht) || 0;
-          const total_ttc = total_ht; 
-          const estimation_achat = total_ht * 0.75; 
-          
-          dataToInsert = {
-            ...dataToInsert,
+          localData = {
+            ...localData,
             client_nom: formData.client_nom || "Client Comptant",
-            total_ht,
-            total_ttc,
-            benefice_realise: total_ttc - estimation_achat,
-            statut: formData.statut || "payee", 
+            total_ttc: total_ht,
+            benefice_realise: total_ht - (total_ht * 0.75),
+            statut: formData.statut || "payee",
+            cree_le: new Date().toISOString()
           };
+          await db[tableName].put(localData);
           break;
 
         case "stock":
           tableName = "gf_produits";
-          dataToInsert = {
-            ...dataToInsert,
+          localData = {
+            ...localData,
             nom: formData.nom_produit,
             prix_achat: Number(formData.prix_achat) || 0,
             prix_vente: Number(formData.prix_vente) || 0,
             stock_actuel: Number(formData.stock_actuel) || 0,
             stock_alerte: Number(formData.stock_alerte) || 5,
           };
-          break;
-
-        case "personnel":
-          tableName = "gp_employes";
-          dataToInsert = {
-            ...dataToInsert,
-            nom: formData.nom,
-            prenom: formData.prenom,
-            statut_contrat: formData.statut_contrat || "CDI",
-          };
-          break;
-
-        case "asset":
-          tableName = "ga_patrimoine";
-          dataToInsert = {
-            ...dataToInsert,
-            num_inventaire: `INV-${Date.now().toString().slice(-6)}`,
-            nom_equipement: formData.nom_equipement,
-            categorie: formData.categorie || "Ordinateur",
-            affectation: formData.affectation,
-            statut_maintenance: "Operationnel",
-          };
+          await db[tableName].put(localData);
           break;
 
         case "school": {
-          const { data: eleve, error: eleveError } = await supabase
-              .from("gs_eleves")
-              .insert({
-                  utilisateur_id: userId,
-                  nom: formData.nom_eleve?.toUpperCase(),
-                  prenom: formData.prenom_eleve,
-                  sexe: formData.sexe,
-                  date_naissance: formData.date_naissance || null,
-                  nom_parent: formData.nom_parent,
-                  telephone_parent: formData.telephone_parent,
-                  adresse: formData.adresse,
-              })
-              .select()
-              .single();
+          // --- ÉCRITURE COMBINÉE COMPATIBLE HORS-LIGNE ---
+          const eleveId = crypto.randomUUID();
+          const inscriptionId = crypto.randomUUID();
 
-          if (eleveError) throw eleveError;
+          const nouvelEleve = {
+            id: eleveId,
+            utilisateur_id: userId,
+            nom: formData.nom_eleve?.toUpperCase(),
+            prenom: formData.prenom_eleve,
+            sexe: formData.sexe,
+            date_naissance: formData.date_naissance || null,
+            nom_parent: formData.nom_parent,
+            telephone_parent: formData.telephone_parent,
+            adresse: formData.adresse,
+            statut_synchro: "local"
+          };
+          await db.gs_eleves.put(nouvelEleve);
 
-          const { data: inscription, error: inscriptionError } = await supabase
-              .from("gs_inscriptions")
-              .insert({
-                  utilisateur_id: userId,
-                  annee_id: Number(formData.annee_id),
-                  eleve_id: eleve.id,
-                  classe_id: Number(formData.classe_id),
-                  numero_matricule: formData.numero_matricule || null,
-                  scolarite_totale: Number(formData.scolarite_totale) || 0,
-                  reduction: Number(formData.reduction) || 0,
-              })
-              .select()
-              .single();
-
-          if (inscriptionError) throw inscriptionError;
+          const nouvelleInscription = {
+            id: inscriptionId,
+            utilisateur_id: userId,
+            annee_id: Number(formData.annee_id),
+            eleve_id: eleveId,
+            classe_id: Number(formData.classe_id),
+            numero_matricule: formData.numero_matricule || null,
+            scolarite_totale: Number(formData.scolarite_totale) || 0,
+            reduction: Number(formData.reduction) || 0,
+            statut_synchro: "local"
+          };
+          await db.gs_inscriptions.put(nouvelleInscription);
 
           const acompte = Number(formData.acompte) || 0;
-
           if (acompte > 0) {
-              const { error: paiementError } = await supabase
-                  .from("gs_paiements")
-                  .insert({
-                      utilisateur_id: userId,
-                      inscription_id: inscription.id,
-                      montant: acompte,
-                      mode_paiement: formData.mode_paiement || "Espèces",
-                      reference: formData.reference || null,
-                  });
-
-              if (paiementError) throw paiementError;
+            const nouveauPaiement = {
+              id: crypto.randomUUID(),
+              utilisateur_id: userId,
+              inscription_id: inscriptionId,
+              montant: acompte,
+              mode_paiement: formData.mode_paiement || "Espèces",
+              reference: formData.reference || null,
+              statut_synchro: "local"
+            };
+            await db.gs_paiements.put(nouveauPaiement);
           }
 
-          setStatus({ type: "success", text: "Élève inscrit avec succès ! Vos KPIs sont à jour." });
+          setStatus({ type: "success", text: "Élève inscrit localement ! Vos KPIs se synchroniseront au retour du réseau." });
           setFormData({});
           setTimeout(() => router.push("/dashboard"), 1500);
           return;
         }
 
-        case "school_enseignant": {
+        case "school_enseignant":
           tableName = "gs_enseignants";
-          dataToInsert = {
-            ...dataToInsert,
+          localData = {
+            ...localData,
             nom: formData.nom_enseignant?.toUpperCase(),
             prenom: formData.prenom_enseignant,
             telephone: formData.telephone_enseignant,
             email: formData.email_enseignant,
             specialite: formData.specialite_enseignant,
           };
+          await db[tableName].put(localData);
           break;
-        }
 
         case "school_paiement": {
-    const montantPaiement = Number(formData.montant_paiement) || 0;
+          tableName = "gs_paiements";
+          const montantPaiement = Number(formData.montant_paiement) || 0;
+          if (montantPaiement <= 0) throw new Error("Le montant doit être supérieur à 0.");
 
-    if (montantPaiement <= 0) {
-      throw new Error("Le montant du paiement doit être supérieur à 0.");
-    }
-
-    const { error: paiementScolariteError } = await supabase
-    .from("gs_paiements")
-    .insert({
-      utilisateur_id: userId,
-      inscription_id: formData.inscription_id, // L'ID de l'inscription sélectionnée
-      montant: montantPaiement,
-      mode_paiement: formData.mode_paiement || "Espèces",
-      reference: formData.reference || null,
-      type_paiement: "scolarite", // Permet de le différencier de l'acompte d'inscription
-      observation: formData.observation || "Paiement tranche scolarité",
-      date_paiement: new Date().toISOString(),
-    });
-
-  if (paiementScolariteError) throw paiementScolariteError;
-
-  setStatus({ type: "success", text: "Paiement de scolarité enregistré ! Vos KPIs sont mis à jour." });
-  setFormData({});
-  setTimeout(() => router.push("/dashboard"), 1500);
-  return;
-}
-
-
-        case "clinic":
-          tableName = "gc_patients_consultations";
-          dataToInsert = {
-            ...dataToInsert,
-            patient_nom: formData.patient_nom,
-            type_evenement: "consultation_terminee",
-            montant_encaisse: Number(formData.montant_encaisse) || 0,
+          localData = {
+            ...localData,
+            inscription_id: formData.inscription_id,
+            montant: montantPaiement,
+            mode_paiement: formData.mode_paiement || "Espèces",
+            reference: formData.reference || null,
           };
+          await db[tableName].put(localData);
           break;
-
-        case "pointage":
-          tableName = "gpt_pointages";
-          dataToInsert = {
-            ...dataToInsert,
-            employe_nom_complet: formData.employe,
-            est_en_retard: formData.retard === "oui",
-            heures_sup: Number(formData.heures_sup) || 0,
-          };
-          break;
-
-        case "data":
-        case "archive":
-          tableName = "gd_missions_archives";
-          dataToInsert = {
-            ...dataToInsert,
-            type_service: currentModule === "data" ? "data_project" : "document_archive",
-            valeur_ou_taille: formData.valeur || "1",
-          };
-          break;
+        }
       }
 
-      const { error } = await supabase.from(tableName).insert([dataToInsert]);
-      if (error) throw error;
-
-      setStatus({ type: "success", text: "Donnée enregistrée avec succès ! Vos KPIs sont à jour." });
+      setStatus({ type: "success", text: "Enregistrement local réussi ! En attente de synchronisation automatique." });
       setFormData({});
-      setTimeout(() => router.push("/dashboard"), 1500);
-
+      // Tentative de poussée immédiate si le réseau fonctionne
+      if (navigator.onLine) {
+        const { declencherSynchronisation } = await import("../../hooks/useSync");
+        declencherSynchronisation();
+      }
     } catch (err: any) {
-      setStatus({ type: "error", text: err.message || "Erreur lors de la sauvegarde." });
+      setStatus({ type: "error", text: err.message || "Une erreur est survenue lors de l'enregistrement." });
     } finally {
       setSaving(false);
     }
   };
 return (
     <div className="max-w-xl mx-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-8 rounded-2xl shadow-sm">
+      
       <div className="mb-6">
         <span className="text-xs font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1 rounded-md">
           Saisie Module : Green{currentModule.charAt(0).toUpperCase() + currentModule.slice(1)}

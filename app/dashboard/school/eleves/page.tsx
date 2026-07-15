@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
+import { db as baseDb } from "../../../lib/db";
+
+const db = baseDb as any;
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -21,34 +24,157 @@ export default function ListeElevesPage() {
 
   useEffect(() => {
     async function fetchDonnees() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return router.push("/login");
+      let activeUid: string | null = null;
 
-      // 1. Récupérer les classes pour le filtre
-      const { data: listeClasses } = await supabase
-        .from("gs_classes")
-        .select("id, nom")
-        .eq("utilisateur_id", user.id)
-        .order("nom");
-      setClasses(listeClasses || []);
+      // 1. TENTATIVE AUTHENTIFICATION CLOUD (PROTECTION TRY/CATCH CONTRE LE CRASH HORSLIGNE)
+      try {
+        if (navigator.onLine) {
+          const { data: { user }, error } = await supabase.auth.getUser();
+          if (!error && user) {
+            activeUid = user.id;
+          }
+        }
+      } catch (authError) {
+        console.log("Supabase Auth inaccessible (Mode hors-ligne pour la liste élèves).");
+      }
 
-      // 2. Récupérer les inscriptions avec jointures monétaires
-      const { data: inscriptions } = await supabase
-        .from("gs_inscriptions")
-        .select(`
-          id,
-          numero_matricule,
-          scolarite_totale,
-          reduction,
-          classe_id,
-          gs_classes ( nom, niveau ),
-          gs_eleves ( nom, prenom, sexe, telephone_parent, nom_parent ),
-          gs_paiements ( montant )
-        `)
-        .eq("utilisateur_id", user.id);
+      // 2. REPLI SUR SESSION PERMANENTE DEXIE SI HORS-LIGNE
+      if (!activeUid) {
+        try {
+          const utilisateursLocaux = await db["utilisateurs"].limit(1).toArray();
+          if (utilisateursLocaux && utilisateursLocaux.length > 0) {
+            activeUid = utilisateursLocaux[0].id;
+          }
+        } catch (dexieAuthError) {
+          console.error("Échec de récupération de la session locale Dexie", dexieAuthError);
+        }
+      }
 
-      setEleves(inscriptions || []);
-      setLoading(false);
+      // SÉCURITÉ : Si aucun utilisateur n'est trouvé, retour à la connexion
+      if (!activeUid) {
+        return router.push("/login");
+      }
+
+      // --- 3. LOGIQUE HORS-LIGNE INTERNE (DEXIE BLINDÉE SANS LIENS ROUGES) ---
+      try {
+        // 3a. Charger les classes depuis Dexie via l'écriture dynamique par crochets
+        const listeClassesLocales = await db["gs_classes"]
+          .where("utilisateur_id")
+          .equals(activeUid)
+          .toArray();
+        setClasses(listeClassesLocales || []);
+
+        // 3b. Charger les tables locales pour reconstruire la jointure manuellement
+        const inscriptionsLocales = await db["gs_inscriptions"].where("utilisateur_id").equals(activeUid).toArray();
+        const elevesLocaux = await db["gs_eleves"].where("utilisateur_id").equals(activeUid).toArray();
+        const paiementsLocaux = await db["gs_paiements"].where("utilisateur_id").equals(activeUid).toArray();
+
+        // 3c. Recréation de l'objet combiné (Jointure manuelle)
+        const dataCombinee = inscriptionsLocales.map((ins: any) => {
+          const classe = listeClassesLocales.find((c: any) => c.id === ins.classe_id);
+          const eleve = elevesLocaux.find((e: any) => e.id === ins.eleve_id);
+          
+          // 🌟 La variable s'appelle 'paiements' ici :
+          const paiements = paiementsLocaux.filter((p: any) => p.inscription_id === ins.id);
+
+          return {
+            id: ins.id,
+            numero_matricule: ins.numero_matricule,
+            scolarite_totale: ins.scolarite_totale,
+            reduction: ins.reduction,
+            classe_id: ins.classe_id,
+            gs_classes: classe ? { nom: classe.nom, niveau: classe.niveau } : null,
+            gs_eleves: eleve ? { 
+              nom: eleve.nom, 
+              prenom: eleve.prenom, 
+              sexe: eleve.sexe, 
+              telephone_parent: eleve.telephone_parent, 
+              nom_parent: eleve.nom_parent 
+            } : null,
+            // ✅ Corrigé ici : on utilise bien 'paiements' au lieu de 'pm'
+            gs_paiements: (paiements || []).map((p: any) => ({ montant: p.montant }))
+          };
+        });
+
+        setEleves(dataCombinee);
+        setLoading(false);
+      } catch (dexieQueryError) {
+        console.error("Erreur d'interrogation des tables Dexie :", dexieQueryError);
+        setLoading(false);
+      }
+
+      // --- 4. REFRESH EN ARRIÈRE-PLAN UNIQUEMENT SI EN LIGNE ---
+      if (navigator.onLine) {
+        try {
+          const { data: serverInscriptions } = await supabase
+            .from("gs_inscriptions")
+            .select(`
+              id, numero_matricule, scolarite_totale, reduction, classe_id, utilisateur_id, annee_id, eleve_id,
+              gs_classes ( id, nom, niveau, utilisateur_id, annee_id ),
+              gs_eleves ( id, nom, prenom, sexe, telephone_parent, nom_parent, utilisateur_id ),
+              gs_paiements ( id, inscription_id, montant, utilisateur_id )
+            `)
+            .eq("utilisateur_id", activeUid);
+
+          if (serverInscriptions) {
+            const localInscriptions: any[] = [];
+            const localEleves: any[] = [];
+            const localPaiements: any[] = [];
+            const localClasses: any[] = [];
+
+            serverInscriptions.forEach((item: any) => {
+              localInscriptions.push({
+                id: item.id,
+                utilisateur_id: item.utilisateur_id,
+                annee_id: item.annee_id,
+                eleve_id: item.eleve_id,
+                classe_id: item.classe_id,
+                numero_matricule: item.numero_matricule,
+                scolarite_totale: item.scolarite_totale,
+                reduction: item.reduction,
+                statut_synchro: "synchronise"
+              });
+
+              if (item.gs_eleves) {
+                localEleves.push({ ...item.gs_eleves, statut_synchro: "synchronise" });
+              }
+              if (item.gs_classes) {
+                localClasses.push({ ...item.gs_classes, statut_synchro: "synchronise" });
+              }
+              if (item.gs_paiements && item.gs_paiements.length > 0) {
+                item.gs_paiements.forEach((p: any) => {
+                  localPaiements.push({ ...p, statut_synchro: "synchronise" });
+                });
+              }
+            });
+
+            // Sauvegarde ou écrasement propre dans Dexie
+            if (localClasses.length > 0) await db["gs_classes"].bulkPut(localClasses);
+            if (localEleves.length > 0) await db["gs_eleves"].bulkPut(localEleves);
+            if (localInscriptions.length > 0) await db["gs_inscriptions"].bulkPut(localInscriptions);
+            if (localPaiements.length > 0) await db["gs_paiements"].bulkPut(localPaiements);
+
+            // Re-lecture propre après mise à jour cloud
+            const rafraichiClasses = await db["gs_classes"].where("utilisateur_id").equals(activeUid).toArray();
+            setClasses(rafraichiClasses);
+
+            const UIComputed = localInscriptions.map((ins) => {
+              const cl = localClasses.find((c: any) => c.id === ins.classe_id);
+              const el = localEleves.find((e: any) => e.id === ins.eleve_id);
+              const pm = localPaiements.filter((p: any) => p.inscription_id === ins.id);
+              return {
+                ...ins,
+                gs_classes: cl ? { nom: cl.nom, niveau: cl.niveau } : null,
+                gs_eleves: el ? { nom: el.nom, prenom: el.prenom, sexe: el.sexe, telephone_parent: el.telephone_parent, nom_parent: el.nom_parent } : null,
+                gs_paiements: (pm || []).map((p: any) => ({ montant: p.montant }))
+              };
+            });
+            setEleves(UIComputed);
+          }
+        } catch (serverError) {
+          console.log("Le rafraîchissement Cloud a échoué (Mode hors-ligne strict ou micro-coupure).", serverError);
+        }
+      }
     }
 
     fetchDonnees();

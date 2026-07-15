@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
+import { db as baseDb } from "../../../lib/db";
+
+const db = baseDb as any;
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -17,23 +20,90 @@ export default function ListeEnseignantsPage() {
 
   useEffect(() => {
     async function fetchEnseignants() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return router.push("/login");
+      let activeUid: string | null = null;
 
-      const { data: corpsProforal } = await supabase
-        .from("gs_enseignants")
-        .select("id, nom, prenom, telephone, email, specialite")
-        .eq("utilisateur_id", user.id)
-        .order("nom");
+      // 1. TENTATIVE SÉCURISÉE SUR SUPABASE (SANS CRASH EN MODE HORS-LIGNE)
+      try {
+        if (navigator.onLine) {
+          const { data: { user }, error } = await supabase.auth.getUser();
+          if (!error && user) {
+            activeUid = user.id;
+          }
+        }
+      } catch (authError) {
+        console.log("Supabase Auth inaccessible (Mode hors-ligne pour la liste enseignants).");
+      }
 
-      setEnseignants(corpsProforal || []);
-      setLoading(false);
+      // 2. REPLI SUR LA SESSION LOCALE PERMANENTE DEXIE
+      if (!activeUid) {
+        try {
+          const utilisateursLocaux = await db["utilisateurs"].limit(1).toArray();
+          if (utilisateursLocaux && utilisateursLocaux.length > 0) {
+            activeUid = utilisateursLocaux[0].id;
+          }
+        } catch (dexieAuthError) {
+          console.error("Échec de récupération de la session locale Dexie", dexieAuthError);
+        }
+      }
+
+      // SÉCURITÉ : Si aucun utilisateur n'est identifié, retour à la connexion
+      if (!activeUid) {
+        return router.push("/login");
+      }
+
+      // --- 3. LECTURE DE LA BASE LOCALE DEXIE (INSTANTANÉE ET SANS LIGNES ROUGES) ---
+      try {
+        const corpsProfessoralLocal = await db["gs_enseignants"]
+          .where("utilisateur_id")
+          .equals(activeUid)
+          .toArray();
+
+        // Tri local par nom pour respecter l'affichage attendu
+        const triLocal = (corpsProfessoralLocal || []).sort((a: any, b: any) => 
+          (a.nom || "").localeCompare(b.nom || "")
+        );
+
+        setEnseignants(triLocal);
+        setLoading(false);
+      } catch (dexieQueryError) {
+        console.error("Erreur d'interrogation locale des enseignants :", dexieQueryError);
+        setLoading(false);
+      }
+
+      // --- 4. REFRESH EN ARRIÈRE-PLAN UNIQUEMENT SI EN LIGNE ---
+      if (navigator.onLine) {
+        try {
+          const { data: corpsProfessoralServeur } = await supabase
+            .from("gs_enseignants")
+            .select("id, nom, prenom, telephone, email, specialite, utilisateur_id")
+            .eq("utilisateur_id", activeUid);
+
+          if (corpsProfessoralServeur && corpsProfessoralServeur.length > 0) {
+            // Formatage des données reçues avec le tag de synchronisation propre
+            const donneesFormatees = corpsProfessoralServeur.map((prof: any) => ({
+              ...prof,
+              statut_synchro: "synchronise"
+            }));
+
+            // Écrase ou ajoute les nouveautés du Cloud dans Dexie sans créer de doublons
+            await db["gs_enseignants"].bulkPut(donneesFormatees);
+
+            // Nouvelle mise à jour de l'affichage avec les données fraîches du serveur
+            const miseAJourTriee = donneesFormatees.sort((a: any, b: any) => 
+              (a.nom || "").localeCompare(b.nom || "")
+            );
+            setEnseignants(miseAJourTriee);
+          }
+        } catch (serverError) {
+          console.log("Le rafraîchissement Cloud des enseignants a échoué (mode déconnecté).", serverError);
+        }
+      }
     }
 
     fetchEnseignants();
   }, [router]);
 
-  // Recherche dynamique
+  // Recherche dynamique (Inchangée, fonctionne parfaitement sur l'état local)
   const profsFiltres = enseignants.filter((prof) => 
     prof.nom?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     prof.prenom?.toLowerCase().includes(searchQuery.toLowerCase()) ||

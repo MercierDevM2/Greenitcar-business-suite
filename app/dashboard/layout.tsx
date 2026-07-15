@@ -7,6 +7,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { hydraterBaseLocale } from "../lib/syncService"; 
 import { declencherSynchronisation } from "../hooks/useSync"; 
 import { db as baseDb } from "../lib/db";
+
 const db = baseDb as any; 
 
 const supabase = createClient(
@@ -19,63 +20,65 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [loadingSync, setLoadingSync] = useState(false);
   const [isOnline, setIsOnline] = useState(typeof window !== "undefined" ? navigator.onLine : true);
-  
   const [nomEntreprise, setNomEntreprise] = useState<string>("");
+  const [servicesCharges, setServicesCharges] = useState<string[] | null>(null);
 
   const router = useRouter();
   const pathname = usePathname();
 
-  // 1. Vos variables d'état pour l'année scolaire
   const [annees, setAnnees] = useState<any[]>([]);
   const [currentAnnee, setCurrentAnnee] = useState<string>("");
 
-  // 2. La requête corrigée pour éviter le bug du undefined
+  // 1. GESTION DE L'ANNÉE SCOLAIRE (Hybride)
   useEffect(() => {
-  async function chargerAnneeScolaire() {
-    console.log("1. Lancement de chargerAnneeScolaire...");
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    
-    if (authError) {
-      console.error("Erreur Auth:", authError);
-      return;
+    async function chargerAnneeScolaire() {
+      if (!navigator.onLine) {
+        const dataLocale = await db.gs_annees_scolaires.toArray();
+        if (dataLocale && dataLocale.length > 0) {
+          setAnnees(dataLocale);
+          setCurrentAnnee(dataLocale[0].id.toString());
+        }
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        if (authError || !user) return;
+
+        const { data, error: dbError } = await supabase
+          .from("gs_annees_scolaires")
+          .select("libelle, id")
+          .eq("utilisateur_id", user.id)
+          .order("id", { ascending: false });
+
+        if (dbError) {
+          console.error("Erreur Supabase Layout:", dbError.message);
+          return;
+        }
+
+        if (data && data.length > 0) {
+          setAnnees(data);
+          setCurrentAnnee(data[0].id.toString());
+        }
+      } catch (e) {
+        console.error("Erreur réseau annee scolaire:", e);
+      } finally {
+        setLoading(false);
+      }
     }
-    if (!user) {
-      console.log("Aucun utilisateur connecté trouvé par le Layout.");
-      return;
-    }
-    console.log("2. Utilisateur trouvé:", user.id);
 
-    const { data, error: dbError } = await supabase
-      .from("gs_annees_scolaires")
-      .select("libelle, id")
-      .eq("utilisateur_id", user.id)
-      .order("id", { ascending: false });
+    chargerAnneeScolaire();
+  }, []);
 
-    if (dbError) {
-      console.error("3. Erreur Supabase DB:", dbError.message, dbError.code);
-      return;
-    }
-
-    console.log("4. Données reçues de la table:", data);
-
-    if (data && data.length > 0) {
-      setAnnees(data);
-      setCurrentAnnee(data[0].id.toString());
-      console.log("5. États mis à jour avec l'ID:", data[0].id);
-    } else {
-      console.log("4b. La table a renvoyé un tableau vide []. Aucune année pour cet utilisateur.");
-    }
-  }
-
-  chargerAnneeScolaire();
-}, []);
-
-
-  // Écouteur d'état du réseau internet
+  // 2. ÉCOUTEUR RÉSEAU INTERNET
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      declencherSynchronisation(); // Pousse les modifications locales vers Supabase dès qu'internet revient
+      // Laisse souffler le thread avant de lancer la synchro lourde
+      setTimeout(() => {
+        declencherSynchronisation();
+      }, 1000);
     };
     const handleOffline = () => setIsOnline(false);
 
@@ -88,35 +91,34 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // 3. SÉCURITÉ FRAUDE ET LICENCE (Résilience réseau intégrée pour couper le chargement infini)
   useEffect(() => {
-  const verifierFraudeEtLicence = async () => {
-    const { data: user } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const dateSystemePC = new Date();
-    
-    // 1. Lire les dernières infos de sécurité stockées dans le disque dur du PC
-    const configLocale = await db['securite_licence'].get('statut_verrou');
-    
-    if (configLocale) {
-      const ancienneDatePC = new Date(configLocale.derniere_date_vue);
-      
-      // TRICHE 1 : L'utilisateur a reculé l'heure de son Windows pour étendre sa licence en espèces
-      if (dateSystemePC < ancienneDatePC) {
-        router.push("/bloque?raison=clock_fraud");
-        return;
+    const verifierFraudeEtLicence = async () => {
+      // Évitement de l'appel auth Supabase si hors-ligne pour casser la boucle infinie Firefox
+      // ✅ CODE CORRIGÉ
+      let uId = null;
+      if (navigator.onLine) {
+        const { data: { user }, error } = await supabase.auth.getUser();
+        if (!error && user) {
+          uId = user.id;
+        }
       }
-    }
 
-    // 2. Mettre à jour la date locale sur le PC (chaque minute par exemple)
-    await db.securite_licence.put({
-      id: 'statut_verrou',
-      derniere_date_vue: dateSystemePC.toISOString()
-    });
-    
-          // --- TRICHE 2 : Le PC est resté hors-ligne trop longtemps pour ne pas recevoir l'ordre de blocage du cloud ---
-      // @ts-ignore
-      const uId = user?.id;
+      const dateSystemePC = new Date();
+      const configLocale = await db['securite_licence'].get('statut_verrou');
+      
+      if (configLocale) {
+        const ancienneDatePC = new Date(configLocale.derniere_date_vue);
+        if (dateSystemePC < ancienneDatePC) {
+          router.push("/bloque?raison=clock_fraud");
+          return;
+        }
+      }
+
+      await db.securite_licence.put({
+        id: 'statut_verrou',
+        derniere_date_vue: dateSystemePC.toISOString()
+      });
       
       if (uId) {
         const dateDerniereSynchroCloud = localStorage.getItem(`derniere_synchro_serveur_${uId}`);
@@ -128,80 +130,104 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           }
         }
       }
+    };
 
-  };
+    verifierFraudeEtLicence();
+    const interval = setInterval(verifierFraudeEtLicence, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [router]);
 
-  // Exécuter la vérification au démarrage et toutes les 5 minutes
-  verifierFraudeEtLicence();
-  const interval = setInterval(verifierFraudeEtLicence, 5 * 60 * 1000);
-  return () => clearInterval(interval);
-}, []);
-
-
+  // 4. EFFET 1 : CHARGEMENT PROFIL ET SERVICES (Une seule fois au démarrage)
   useEffect(() => {
-  async function fetchUserServicesAndHydrate() {
-    const { data: { user } } = await supabase.auth.getUser();
-    
-    // Sécurité 1 : Si l'utilisateur n'est pas connecté, retour à la connexion
-    if (!user) {
-      router.push("/connexion");
-      return;
-    }
-
-    // --- HYDRATATION EN AMONT POUR LE MODE HORS-LIGNE ---
-    const dejaHydrate = localStorage.getItem(`greenitcar_hydrated_${user.id}`);
-    if (!dejaHydrate && navigator.onLine) {
-      setLoadingSync(true);
-      await hydraterBaseLocale(user.id); // Copie toutes les tables Supabase sur IndexedDB
-      setLoadingSync(false);
-    }
-
-    // Récupération sécurisée des services et du nom de l'entreprise
-    const { data: userData } = await supabase
-      .from("utilisateurs")
-      .select("services_choisis, nom_entreprise")
-      .eq("id", user.id)
-      .single();
-    
-    if (userData) {
-      if (userData.services_choisis) {
-        setActiveServices(userData.services_choisis);
-      }
-      // On stocke le nom trouvé
-      setNomEntreprise(userData.nom_entreprise || "Entreprise");
-
-      // --- SÉCURITÉ 2 : Bloquer l'accès manuel par URL si le service n'est pas choisi ---
-      const currentModule = pathname.split("/")[2]; 
-      const routesAutoriseesSansModule = ["notifications", "profil", "parametres", undefined];
-
-      if (!routesAutoriseesSansModule.includes(currentModule)) {
-        const routeToModuleMap: { [key: string]: string } = {
-          "factures": "facture",
-          "stock": "stock",
-          "personnel": "personnel",
-          "inventaire": "asset",
-          "school": "school",
-          "clinic": "clinic",
-          "pointage": "pointage",
-          "rapports": "data",
-          "archives": "archive"
-        };
-
-        const requiredModuleId = routeToModuleMap[currentModule];
-        
-        if (requiredModuleId && !userData.services_choisis.includes(requiredModuleId)) {
-          router.push("/dashboard"); 
+    async function fetchUserServicesAndHydrate() {
+      if (!navigator.onLine) {
+        const localUser = await db.utilisateurs.limit(1).toArray();
+        if (localUser && localUser.length > 0) {
+          setActiveServices(localUser[0].services_choisis || []);
+          setServicesCharges(localUser[0].services_choisis || []);
+          setNomEntreprise(localUser[0].nom_entreprise || "Entreprise Locale");
         }
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          // Si on est sur l'écran de connexion ou d'inscription, ne pas rediriger en boucle
+          if (pathname !== "/connexion" && pathname !== "/inscription") {
+            router.push("/connexion");
+          }
+          return;
+        }
+
+        const dejaHydrate = localStorage.getItem(`greenitcar_hydrated_${user.id}`);
+        if (!dejaHydrate) {
+          setLoadingSync(true);
+          await hydraterBaseLocale(user.id); 
+          setLoadingSync(false);
+        }
+
+        const { data: userData } = await supabase
+          .from("utilisateurs")
+          .select("services_choisis, nom_entreprise")
+          .eq("id", user.id)
+          .single();
+      
+        if (userData) {
+          if (userData.services_choisis) {
+            setActiveServices(userData.services_choisis);
+            setServicesCharges(userData.services_choisis);
+          }
+          setNomEntreprise(userData.nom_entreprise || "Entreprise");
+          // Sauvegarde locale de secours pour le prochain démarrage hors-ligne
+          await db.utilisateurs.put({
+            id: user.id,
+            services_choisis: userData.services_choisis || [],
+            nom_entreprise: userData.nom_entreprise || "Entreprise"
+          });
+        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
       }
     }
-    setLoading(false);
-  }
 
-  fetchUserServicesAndHydrate();
-}, [pathname, router]);
+    fetchUserServicesAndHydrate();
+  }, [router, pathname]);
 
+  // 5. EFFET 2 : SÉCURITÉ DE ROUTAGE PAR URL (Zéro appel réseau, résout le crash de redirection)
+  useEffect(() => {
+    if (!servicesCharges) return; 
 
-  // Organisation des catégories métiers
+    const segments = pathname.split("/");
+    const currentModule = segments[2]; 
+    const routesAutoriseesSansModule = ["notifications", "profil", "parametres", undefined];
+
+    if (!routesAutoriseesSansModule.includes(currentModule)) {
+      const routeToModuleMap: { [key: string]: string } = {
+        "factures": "facture",
+        "stock": "stock",
+        "personnel": "personnel",
+        "inventaire": "asset",
+        "school": "school",
+        "clinic": "clinic",
+        "pointage": "pointage",
+        "rapports": "data",
+        "archives": "archive"
+      };
+
+      const requiredModuleId = routeToModuleMap[currentModule];
+      
+      if (requiredModuleId && !servicesCharges.includes(requiredModuleId) && pathname !== "/dashboard") {
+        console.log(`⛔ Accès refusé pour ${currentModule}. Redirection...`);
+        router.push("/dashboard"); 
+      }
+    }
+  }, [pathname, servicesCharges, router]);
+
+  // Menu de navigation
   const menuConfig = [
     {
       category: "Pilotage & Décision",
@@ -370,6 +396,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             
             {/* Badge de connectivité anti-délestage */}
         <div className="flex items-center gap-4">
+          <button
+      onClick={() => router.back()} // Utilise l'historique du navigateur
+      className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-600 bg-white border rounded-md shadow-sm hover:bg-gray-50 transition"
+    >
+      ⬅️ Retour
+    </button>
           <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold ${
             isOnline 
               ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/30" 
