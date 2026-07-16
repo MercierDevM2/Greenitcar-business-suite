@@ -6,62 +6,112 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-/**
- * Télécharge toutes les données de l'utilisateur depuis Supabase 
- * et les enregistre localement sur le PC.
- */
-export async function hydraterBaseLocale(userId: string) {
-  console.log("Début de l'hydratation initiale de la base locale...");
+const TABLES_MIGRATION = [
+  { locale: "gf_factures", serveur: "gf_factures" },
+  { locale: "gf_produits", serveur: "gf_produits" },
+  { locale: "gs_annees_scolaires", serveur: "gs_annees_scolaires" },
+  { locale: "gs_classes", serveur: "gs_classes" },
+  { locale: "gs_eleves", serveur: "gs_eleves" },
+  { locale: "gs_inscriptions", serveur: "gs_inscriptions" },
+  { locale: "gs_paiements", serveur: "gs_paiements" },
+  { locale: "gs_enseignants", serveur: "gs_enseignants" },
+  { locale: "gp_employes", serveur: "gp_employes" },
+  { locale: "ga_patrimoine", serveur: "ga_patrimoine" },
+  { locale: "gpt_pointages", serveur: "gpt_pointages" }
+];
 
-  // Liste de toutes vos tables Supabase à cloner sur le PC
-  // Clé : Nom de la table locale Dexie | Valeur : Nom de la table Supabase
-  const tablesAMigrer = [
-    { locale: "utilisateurs", serveur: "utilisateurs" },
-    { locale: "gf_factures", serveur: "gf_factures" },
-    { locale: "gf_produits", serveur: "gf_produits" },
-    { locale: "gs_annees_scolaires", serveur: "gs_annees_scolaires" },
-    { locale: "gs_classes", serveur: "gs_classes" },
-    { locale: "gs_eleves", serveur: "gs_eleves" },
-    { locale: "gs_inscriptions", serveur: "gs_inscriptions" },
-    { locale: "gs_paiements", serveur: "gs_paiements" },
-    { locale: "gs_enseignants", serveur: "gs_enseignants" },
-    { locale: "gp_employes", serveur: "gp_employes" },
-    { locale: "ga_patrimoine", serveur: "ga_patrimoine" },
-    { locale: "gpt_pointages", serveur: "gpt_pointages" }
-  ];
+export async function exporterDonneesLocales(userId: string) {
+  console.log("📤 Début de l'exportation des données locales...");
 
-  for (const table of tablesAMigrer) {
+  for (const table of TABLES_MIGRATION) {
     try {
-      // 1. Récupération des données filtrées par l'ID de l'utilisateur connecté
-      const { data, error } = await supabase
-        .from(table.serveur)
-        .select("*")
-        .eq(table.serveur === "utilisateurs" ? "id" : "utilisateur_id", userId);
+      // @ts-ignore
+      const toutesLesDonneesLocales = await db[table.locale].toArray();
+      
+      // On accepte indifféremment "local" ou "pending" ou vide pour ne rien bloquer
+      const enAttente = toutesLesDonneesLocales.filter((item: any) => {
+        const estPending = item.statut_synchro === "pending" || item.statut_synchro === "local" || !item.statut_synchro;
+        const estMonId = item.utilisateur_id === userId || !item.utilisateur_id;
+        return estPending && estMonId;
+      });
 
-      if (error) throw error;
+      if (enAttente.length > 0) {
+        console.log(`Table [${table.locale}] : ${enAttente.length} lignes à envoyer.`);
 
-      if (data && data.length > 0) {
-        // 2. Formatage pour la base locale (on s'assure que le statut est marqué comme synchronisé)
-        const donneesFormatees = data.map((item: any) => ({
-          ...item,
-          // Si la table est 'utilisateurs', elle n'a pas besoin de flag de synchro, sinon oui
-          ...(table.locale !== "utilisateurs" && { statut_synchro: "synonise" })
-        }));
+        const donneesPropres = enAttente.map(({ statut_synchro, id, ...reste }: any) => {
+          const baseRow: any = {
+            ...reste,
+            utilisateur_id: userId
+          };
 
-        // 3. Nettoyage de l'ancienne table locale pour éviter les doublons et injection des données fraîches
+          // Correction universelle du champ reference_paiement
+          if ("reference_paiement" in baseRow) {
+            baseRow.reference = baseRow.reference_paiement;
+            delete baseRow.reference_paiement;
+          }
+
+          // Si l'ID local est un UUID (string avec tiret) et que Supabase attend un BigInt
+          if (typeof id === "string" && id.includes("-")) {
+            // On laisse Supabase attribuer l'ID BigInt automatiquement (Option recommandée)
+          } else {
+            baseRow.id = id;
+          }
+
+          return baseRow;
+        });
+
+        const { error } = await supabase.from(table.serveur).upsert(donneesPropres);
+
+        if (error) {
+          console.error(`❌ Erreur d'envoi Supabase [${table.serveur}] :`, error.message);
+          throw error;
+        }
+
+        // On marque le local en "synced"
         // @ts-ignore
-        await db[table.locale].clear();
-        // @ts-ignore
-        await db[table.locale].bulkPut(donneesFormatees);
-        
-        console.log(`Table locale [${table.locale}] synchronisée : ${data.length} lignes importées.`);
+        await db[table.locale]
+          .where("id")
+          .anyOf(enAttente.map((i: any) => i.id))
+          .modify({ statut_synchro: "synced", utilisateur_id: userId });
+
+        console.log(`✅ Table [${table.locale}] synchronisée.`);
       }
     } catch (err) {
-      console.error(`Erreur lors de l'hydratation de la table ${table.locale} :`, err);
+      console.error(`Erreur export table ${table.locale} :`, err);
     }
   }
+}
 
-  // Enregistrement d'un marqueur dans le LocalStorage pour ne pas refaire cette grosse opération à chaque rafraîchissement
-  localStorage.setItem(`greenitcar_hydrated_${userId}`, "true");
-  console.log("Hydratation initiale terminée avec succès !");
+export async function hydraterBaseLocale(userId: string) {
+  console.log("📥 Rafraîchissement du cache depuis le Cloud...");
+  for (const table of TABLES_MIGRATION) {
+    try {
+      const { data, error } = await supabase.from(table.serveur).select("*").eq("utilisateur_id", userId);
+      if (error) throw error;
+
+      const donneesFormatees = (data || []).map((item: any) => ({
+        ...item,
+        statut_synchro: "synced"
+      }));
+
+      // @ts-ignore
+      await db[table.locale].where("utilisateur_id").equals(userId).delete();
+      if (donneesFormatees.length > 0) {
+        // @ts-ignore
+        await db[table.locale].bulkPut(donneesFormatees);
+      }
+    } catch (err) {
+      console.error(`Erreur hydratation ${table.locale} :`, err);
+    }
+  }
+}
+
+export async function executionSynchronisationGlobale(userId: string, anneeId: string) {
+  try {
+    await exporterDonneesLocales(userId);
+    await hydraterBaseLocale(userId);
+    console.log("🔄 Synchronisation globale bidirectionnelle terminée.");
+  } catch (error) {
+    console.error("Échec synchro globale :", error);
+  }
 }

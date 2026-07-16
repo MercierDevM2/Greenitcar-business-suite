@@ -147,26 +147,40 @@ useEffect(() => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+     const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userId) return;
     setSaving(true);
     setStatus(null);
 
+    // 💡 Récupération de secours directe depuis le DOM si le state formData est incomplet
+    const target = e.target as HTMLFormElement;
+    const currentForm = new FormData(target);
+    
+    const getVal = (name: string, fallback: string = "") => {
+      return formData[name] || currentForm.get(name) || fallback;
+    };
+
     let tableName = "";
-    let localData: any = { id: crypto.randomUUID(), utilisateur_id: userId, statut_synchro: "local" };
+    const idNumeriqueUnique = () => Number(`${Date.now()}${Math.floor(Math.random() * 100)}`);
+    
+    let localData: any = { 
+      id: idNumeriqueUnique(), 
+      utilisateur_id: userId, 
+      statut_synchro: "local" 
+    };
 
     try {
       switch (currentModule) {
         case "facture":
           tableName = "gf_factures";
-          const total_ht = Number(formData.total_ht) || 0;
+          const inputCA = Number(getVal("total_ht")) || Number(getVal("total_ttc")) || 0;
           localData = {
             ...localData,
-            client_nom: formData.client_nom || "Client Comptant",
-            total_ttc: total_ht,
-            benefice_realise: total_ht - (total_ht * 0.75),
-            statut: formData.statut || "payee",
+            client_nom: getVal("client_nom", "Client Comptant"),
+            total_ttc: inputCA,
+            benefice_realise: inputCA - (inputCA * 0.75),
+            statut: getVal("statut", "payee"),
             cree_le: new Date().toISOString()
           };
           await db[tableName].put(localData);
@@ -176,110 +190,108 @@ useEffect(() => {
           tableName = "gf_produits";
           localData = {
             ...localData,
-            nom: formData.nom_produit,
-            prix_achat: Number(formData.prix_achat) || 0,
-            prix_vente: Number(formData.prix_vente) || 0,
-            stock_actuel: Number(formData.stock_actuel) || 0,
-            stock_alerte: Number(formData.stock_alerte) || 5,
+            nom: getVal("nom_produit") || getVal("nom"),
+            prix_achat: Number(getVal("prix_achat")) || 0,
+            prix_vente: Number(getVal("prix_vente")) || 0,
+            stock_actuel: Number(getVal("stock_actuel")) || 0,
+            stock_alerte: Number(getVal("stock_alerte")) || 5,
           };
           await db[tableName].put(localData);
           break;
 
-        case "school": {
+                case "school": {
           // --- ÉCRITURE COMBINÉE COMPATIBLE HORS-LIGNE ---
-          const eleveId = crypto.randomUUID();
-          const inscriptionId = crypto.randomUUID();
+          const eleveIdNum = idNumeriqueUnique();
+          const inscriptionIdNum = idNumeriqueUnique();
 
+          // 1. Enregistrement de l'élève
           const nouvelEleve = {
-            id: eleveId,
+            id: eleveIdNum,
             utilisateur_id: userId,
-            nom: formData.nom_eleve?.toUpperCase(),
-            prenom: formData.prenom_eleve,
-            sexe: formData.sexe,
-            date_naissance: formData.date_naissance || null,
-            nom_parent: formData.nom_parent,
-            telephone_parent: formData.telephone_parent,
-            adresse: formData.adresse,
+            nom: (getVal("nom_eleve") || getVal("nom"))?.toUpperCase(),
+            prenom: getVal("prenom_eleve") || getVal("prenom"),
+            sexe: getVal("sexe", "M"),
+            date_naissance: getVal("date_naissance") || null,
+            nom_parent: getVal("nom_parent"),
+            telephone_parent: getVal("telephone_parent"),
+            adresse: getVal("adresse"),
             statut_synchro: "local"
           };
           await db.gs_eleves.put(nouvelEleve);
 
+          // 2. Enregistrement de l'inscription
           const nouvelleInscription = {
-            id: inscriptionId,
+            id: inscriptionIdNum,
             utilisateur_id: userId,
-            annee_id: Number(formData.annee_id),
-            eleve_id: eleveId,
-            classe_id: Number(formData.classe_id),
-            numero_matricule: formData.numero_matricule || null,
-            scolarite_totale: Number(formData.scolarite_totale) || 0,
-            reduction: Number(formData.reduction) || 0,
+            annee_id: Number(getVal("annee_id")),
+            eleve_id: eleveIdNum,
+            classe_id: Number(getVal("classe_id")),
+            numero_matricule: getVal("numero_matricule") || null,
+            scolarite_totale: Number(getVal("scolarite_totale")) || 0,
+            reduction: Number(getVal("reduction")) || 0,
             statut_synchro: "local"
           };
           await db.gs_inscriptions.put(nouvelleInscription);
 
-          const acompte = Number(formData.acompte) || 0;
-          if (acompte > 0) {
-            const nouveauPaiement = {
-              id: crypto.randomUUID(),
+          // 3. 💡 CAPTURE ET ENREGISTREMENT AUTOMATIQUE DE L'ACOMPTE
+          const montantAcompte = Number(formData.acompte) || Number(getVal("acompte")) || 0;
+
+          if (montantAcompte > 0) {
+            const nouveauPaiementAcompte = {
+              id: idNumeriqueUnique(), // Génère un id entier unique bigint
               utilisateur_id: userId,
-              inscription_id: inscriptionId,
-              montant: acompte,
-              mode_paiement: formData.mode_paiement || "Espèces",
-              reference: formData.reference || null,
+              inscription_id: inscriptionIdNum, // Lie le paiement à l'inscription que l'on vient de créer
+              montant: montantAcompte, // Injecte l'acompte dans la colonne montant attendue par Supabase
+              mode_paiement: getVal("mode_paiement") || "Espèces", // Récupère le mode s'il existe, sinon Espèces
+              reference: "Acompte Inscription", // Libellé automatique pour s'y retrouver
+              date_paiement: new Date().toISOString(),
               statut_synchro: "local"
             };
-            await db.gs_paiements.put(nouveauPaiement);
+            
+            await db.gs_paiements.put(nouveauPaiementAcompte);
+            console.log(`Acompte de ${montantAcompte} FCFA enregistré avec succès pour l'inscription ${inscriptionIdNum}`);
           }
-
-          setStatus({ type: "success", text: "Élève inscrit localement ! Vos KPIs se synchroniseront au retour du réseau." });
-          setFormData({});
-          setTimeout(() => router.push("/dashboard"), 1500);
-          return;
+          break;
         }
 
-        case "school_enseignant":
-          tableName = "gs_enseignants";
-          localData = {
-            ...localData,
-            nom: formData.nom_enseignant?.toUpperCase(),
-            prenom: formData.prenom_enseignant,
-            telephone: formData.telephone_enseignant,
-            email: formData.email_enseignant,
-            specialite: formData.specialite_enseignant,
-          };
-          await db[tableName].put(localData);
-          break;
 
-        case "school_paiement": {
+          case "school_paiement": {
           tableName = "gs_paiements";
-          const montantPaiement = Number(formData.montant_paiement) || 0;
-          if (montantPaiement <= 0) throw new Error("Le montant doit être supérieur à 0.");
+          
+          // Récupération sécurisée peu importe si le state ou le DOM l'a capturé
+          const montantSaisi = Number(formData.montant_paiement) || Number(getVal("montant_paiement")) || 0;
+          const referenceSaisie = formData.reference || getVal("reference") || null;
+          const modeSaisi = formData.mode_paiement || getVal("mode_paiement") || "Espèces";
+          const dateSaisie = formData.date_paiement || getVal("date_paiement") || new Date().toISOString();
 
           localData = {
             ...localData,
-            inscription_id: formData.inscription_id,
-            montant: montantPaiement,
-            mode_paiement: formData.mode_paiement || "Espèces",
-            reference: formData.reference || null,
+            inscription_id: Number(formData.inscription_id) || Number(getVal("inscription_id")),
+            montant: montantSaisi, // Enregistre le chiffre saisi !
+            mode_paiement: modeSaisi,
+            reference: referenceSaisie, // Aligné sur la colonne 'reference' de Supabase
+            date_paiement: dateSaisie
           };
+          
           await db[tableName].put(localData);
           break;
         }
+
       }
 
-      setStatus({ type: "success", text: "Enregistrement local réussi ! En attente de synchronisation automatique." });
+      setStatus({ type: "success", text: "Enregistré localement avec succès !" });
       setFormData({});
-      // Tentative de poussée immédiate si le réseau fonctionne
-      if (navigator.onLine) {
-        const { declencherSynchronisation } = await import("../../hooks/useSync");
-        declencherSynchronisation();
-      }
-    } catch (err: any) {
-      setStatus({ type: "error", text: err.message || "Une erreur est survenue lors de l'enregistrement." });
+      target.reset(); // Vide visuellement les champs du formulaire HTML
+    } catch (error) {
+      console.error("Erreur insertion locale :", error);
+      setStatus({ type: "error", text: "Erreur de stockage local." });
     } finally {
       setSaving(false);
     }
   };
+
+
+
 return (
     <div className="max-w-xl mx-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-8 rounded-2xl shadow-sm">
       
@@ -314,7 +326,7 @@ return (
               </div>
             </div>
 
-            {/* Informations Client */}
+                        {/* Informations Client */}
             <div>
               <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
                 Nom du client / Entreprise *
@@ -326,7 +338,7 @@ return (
                 value={formData.client_nom || ""}
                 onChange={handleInputChange}
                 placeholder="ex: Client Comptant, Société X"
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
               />
             </div>
 
@@ -341,8 +353,8 @@ return (
                 required
                 value={formData.designation_produit || ""}
                 onChange={handleInputChange}
-                placeholder="ex: iPhone 14 Pro, Souris Logitech USB, PC HP EliteBook"
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                placeholder="ex: PC HP EliteBook, Sac de Ciment, Moto..."
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
               />
             </div>
 
@@ -360,9 +372,9 @@ return (
                     value={formData.total_ht || ""}
                     onChange={handleInputChange}
                     placeholder="ex: 250000"
-                    className="w-full pl-4 pr-16 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className="w-full pl-4 pr-16 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors font-mono"
                   />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 dark:text-slate-500">
                     FCFA
                   </span>
                 </div>
@@ -370,18 +382,18 @@ return (
 
               {/* Bloc de Ventilation Financière Automatique */}
               {Number(formData.total_ht) > 0 && (
-                <div className="p-4 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800/60 rounded-xl space-y-2 text-sm animate-fadeIn">
-                  <div className="flex justify-between text-slate-500">
+                <div className="p-4 bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800/60 rounded-xl space-y-2 text-sm animate-fadeIn shadow-inner">
+                  <div className="flex justify-between text-slate-500 dark:text-slate-400">
                     <span>Montant HT :</span>
-                    <span className="font-mono">{(Number(formData.total_ht)).toLocaleString('fr-FR')} FCFA</span>
+                    <span className="font-mono font-semibold">{(Number(formData.total_ht)).toLocaleString('fr-FR')} FCFA</span>
                   </div>
-                  <div className="flex justify-between text-slate-500">
+                  <div className="flex justify-between text-slate-500 dark:text-slate-400">
                     <span>TVA Estimée (20%) :</span>
-                    <span className="font-mono">{(Number(formData.total_ht) * 0.2).toLocaleString('fr-FR')} FCFA</span>
+                    <span className="font-mono font-semibold">{(Number(formData.total_ht) * 0.2).toLocaleString('fr-FR')} FCFA</span>
                   </div>
-                  <div className="flex justify-between font-bold border-t border-slate-100 dark:border-slate-800 pt-2 text-slate-900 dark:text-white text-base">
+                  <div className="flex justify-between font-bold border-t border-slate-200 dark:border-slate-700 pt-2 text-slate-900 dark:text-white text-base">
                     <span>Total à Payer (TTC) :</span>
-                    <span className="text-emerald-600 dark:text-emerald-400 font-mono">
+                    <span className="text-emerald-600 dark:text-emerald-400 font-mono font-bold">
                       {(Number(formData.total_ht) * 1.2).toLocaleString('fr-FR')} FCFA
                     </span>
                   </div>
@@ -398,21 +410,21 @@ return (
                 name="statut"
                 value={formData.statut || "payee"}
                 onChange={handleInputChange}
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
               >
-                <option value="payee">Payée au comptant (Espèces / Mobile Money)</option>
-                <option value="en_attente">En attente de paiement (Facture proforma / Crédit)</option>
+                <option value="payee" className="dark:bg-slate-900">Payée au comptant (Espèces / Mobile Money)</option>
+                <option value="en_attente" className="dark:bg-slate-900">En attente de paiement (Facture proforma / Crédit)</option>
               </select>
             </div>
 
           </div>
 
           {/* Bouton d'Impression Direct de l'Aperçu Écran */}
-          <div className="flex justify-end">
+          <div className="flex justify-end pt-2">
             <button
               type="button"
               onClick={() => window.print()}
-              className="text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-4 py-2 rounded-xl transition-all flex items-center gap-1.5 border border-slate-200 dark:border-slate-700/60 shadow-sm"
+              className="text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-1.5 border border-slate-200 dark:border-slate-700/60 shadow-sm w-full sm:w-auto active:scale-98"
             >
               🖨️ Imprimer cet aperçu client
             </button>
@@ -467,13 +479,14 @@ return (
           </>
         )}
 
-      {/* FORMULAIRE GREENSCHOOL */}
+            {/* FORMULAIRE GREENSCHOOL */}
       {currentModule === "school" && (
         <>
           {/* Informations élève */}
-          <div className="grid grid-cols-2 gap-4">
+          {/* 📱 1 colonne sur mobile, 💻 2 colonnes automatiques sur ordinateur */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
                 Nom(s)
               </label>
               <input
@@ -481,12 +494,12 @@ return (
                 type="text"
                 name="nom_eleve"
                 onChange={handleInputChange}
-                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm"
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
               />
             </div>
 
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
                 Prénom(s)
               </label>
               <input
@@ -494,54 +507,54 @@ return (
                 type="text"
                 name="prenom_eleve"
                 onChange={handleInputChange}
-                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm"
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
                 Sexe
               </label>
               <select
                 name="sexe"
                 onChange={handleInputChange}
-                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
               >
-                <option value="">Choisir</option>
-                <option value="Masculin">Masculin</option>
-                <option value="Féminin">Féminin</option>
+                <option value="" className="dark:bg-slate-900">Choisir</option>
+                <option value="Masculin" className="dark:bg-slate-900">Masculin</option>
+                <option value="Féminin" className="dark:bg-slate-900">Féminin</option>
               </select>
             </div>
 
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
                 Date de naissance
               </label>
               <input
                 type="date"
                 name="date_naissance"
                 onChange={handleInputChange}
-                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
               />
             </div>
           </div>
 
           <div>
-            <label className="text-xs font-bold text-slate-500 uppercase">
+            <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
               Nom du parent / Tuteur
             </label>
             <input
               type="text"
               name="nom_parent"
               onChange={handleInputChange}
-              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
             />
           </div>
 
           <div>
-            <label className="text-xs font-bold text-slate-500 uppercase">
+            <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
               Téléphone du parent
             </label>
             <input
@@ -549,41 +562,40 @@ return (
               name="telephone_parent"
               onChange={handleInputChange}
               placeholder="+236..."
-              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors font-mono"
             />
           </div>
 
           <div>
-            <label className="text-xs font-bold text-slate-500 uppercase">
+            <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
               Adresse
             </label>
             <input
               type="text"
               name="adresse"
               onChange={handleInputChange}
-              placeholder="Quartier"
-              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+              placeholder="Quartier (ex: Lakouanga, Boy-Rabe...)"
+              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
             />
           </div>
 
-          <hr className="my-5" />
+          <hr className="my-5 border-slate-200 dark:border-slate-800" />
 
           {/* Inscription */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
                 Année scolaire
               </label>
               <select
                 required
                 name="annee_id"
                 onChange={handleInputChange}
-                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
               >
-                <option value="">Sélectionner</option>
-
+                <option value="" className="dark:bg-slate-900">Sélectionner</option>
                 {anneesScolaires.map((annee) => (
-                  <option key={annee.id} value={annee.id}>
+                  <option key={annee.id} value={annee.id} className="dark:bg-slate-900">
                     {annee.libelle}
                   </option>
                 ))}
@@ -591,19 +603,18 @@ return (
             </div>
 
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
                 Classe
               </label>
               <select
                 required
                 name="classe_id"
                 onChange={handleInputChange}
-                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
               >
-                <option value="">Sélectionner</option>
-
+                <option value="" className="dark:bg-slate-900">Sélectionner</option>
                 {classes.map((classe) => (
-                  <option key={classe.id} value={classe.id}>
+                  <option key={classe.id} value={classe.id} className="dark:bg-slate-900">
                     {classe.nom}
                   </option>
                 ))}
@@ -612,20 +623,20 @@ return (
           </div>
 
           <div>
-            <label className="text-xs font-bold text-slate-500 uppercase">
+            <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
               Numéro matricule
             </label>
             <input
               type="text"
               name="numero_matricule"
               onChange={handleInputChange}
-              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors font-mono"
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
                  Scolarité Annuelle
               </label>
               <input
@@ -633,12 +644,12 @@ return (
                 type="number"
                 name="scolarite_totale"
                 onChange={handleInputChange}
-                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
               />
             </div>
 
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                       <div>
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                 Réduction / Remise (FCFA)
               </label>
               <input
@@ -648,17 +659,18 @@ return (
                 placeholder="Ex: 50000 (0 si aucune)"
                 defaultValue={0}
                 min={0} // Évite de saisir des réductions négatives
-                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
               />
             </div>
           </div>
 
-          <hr className="my-5" />
+          <hr className="my-5 border-slate-200 dark:border-slate-800" />
 
           {/* Paiement */}
-          <div className="grid grid-cols-2 gap-4">
+          {/* 📱 1 colonne verticale sous le pouce, 💻 2 colonnes sur PC */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
                 Acompte versé
               </label>
               <input
@@ -666,41 +678,42 @@ return (
                 name="acompte"
                 defaultValue={0}
                 onChange={handleInputChange}
-                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
               />
             </div>
 
             <div>
-              <label className="text-xs font-bold text-slate-500 uppercase">
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
                 Mode de paiement
               </label>
               <select
                 name="mode_paiement"
                 onChange={handleInputChange}
-                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+                className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
               >
-                <option value="Espèces">Espèces</option>
-                <option value="Mobile Money">Mobile Money</option>
-                <option value="Virement">Virement</option>
-                <option value="Chèque">Chèque</option>
+                <option value="Espèces" className="dark:bg-slate-900">Espèces</option>
+                <option value="Mobile Money" className="dark:bg-slate-900">Mobile Money (Orange, Moov...)</option>
+                <option value="Virement" className="dark:bg-slate-900">Virement</option>
+                <option value="Chèque" className="dark:bg-slate-900">Chèque</option>
               </select>
             </div>
           </div>
 
           <div>
-            <label className="text-xs font-bold text-slate-500 uppercase">
+            <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
               Référence du paiement
             </label>
             <input
               type="text"
               name="reference"
-              placeholder="Ex: Chèque N°12345, Transfert Wave, Espèces..."
+              placeholder="Ex: N° Chèque, ID Transaction..."
               onChange={handleInputChange}
-              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800"
+              className="w-full mt-1.5 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
             />
           </div>
         </>
       )}
+
 
       {/* FORMULAIRE GREEN_SCHOOL : ENSEIGNANTS */}
         {currentModule === "school_enseignant" && (

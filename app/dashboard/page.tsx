@@ -4,6 +4,10 @@ import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
 import { db as baseDb } from "../lib/db";
+// @ts-ignore
+import { executionSynchronisationGlobale } from "../lib/syncService";
+
+
 
 const db = baseDb as any;
 
@@ -18,6 +22,63 @@ interface KpiCard {
   moduleName: string;
   color: string;
 }
+
+// =========================================================================
+// 🔄 LOGIQUE DE SYNCHRONISATION GLOBALE (DEXIE PENDING -> SUPABASE -> DEXIE CACHE)
+// =========================================================================
+const executionSynchronisationGlobale = async (userId: string, anneeId: string): Promise<void> => {
+  try {
+    console.log("Début de la synchronisation pour l'utilisateur :", userId);
+
+    // --- EXEMPLE DE SYNCHRO MODULE ÉCOLE : INSCRIPTIONS ---
+    // 1. Récupérer les inserts locaux en attente
+    const inscriptionsPending = await db["gs_inscriptions"]
+      .filter((item: any) => item.utilisateur_id === userId && item.statut_synchro === "pending")
+      .toArray();
+
+    if (inscriptionsPending.length > 0) {
+      // 2. Envoyer vers Supabase (en retirant le champ local 'statut_synchro' avant envoi)
+      const dataToSend = inscriptionsPending.map(({ statut_synchro, ...reste }: any) => reste);
+      const { error } = await supabase.from("gs_inscriptions").upsert(dataToSend);
+
+      if (!error) {
+        // 3. Passer le statut en "synced" localement une fois validé par Supabase
+        await db["gs_inscriptions"]
+          .where("id")
+          .anyOf(inscriptionsPending.map((i: any) => i.id))
+          .modify({ statut_synchro: "synced" });
+      } else {
+        console.error("Erreur Supabase Inscriptions :", error);
+      }
+    }
+
+    // --- EXEMPLE DE SYNCHRO MODULE COMMERCE : FACTURES ---
+    const facturesPending = await db["gf_factures"]
+      .filter((item: any) => item.utilisateur_id === userId && item.statut_synchro === "pending")
+      .toArray();
+
+    if (facturesPending.length > 0) {
+      const dataToSend = facturesPending.map(({ statut_synchro, ...reste }: any) => reste);
+      const { error } = await supabase.from("gf_factures").upsert(dataToSend);
+
+      if (!error) {
+        await db["gf_factures"]
+          .where("id")
+          .anyOf(facturesPending.map((f: any) => f.id))
+          .modify({ statut_synchro: "synced" });
+      } else {
+        console.error("Erreur Supabase Factures :", error);
+      }
+    }
+
+    // Répétez ce schéma pour vos autres tables si nécessaire (gs_paiements, gf_produits...)
+
+    console.log("✅ Synchronisation globale terminée avec succès !");
+  } catch (error) {
+    console.error("Erreur critique lors de la synchronisation :", error);
+    throw error;
+  }
+};
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -47,270 +108,148 @@ export default function DashboardPage() {
     margeTotale: 0,
   });
 
-  // ==========================================
-  // 🏫 SÉCURISATION HYBRIDE : LOAD SCHOOL DATA
-  // ==========================================
   const loadSchoolData = async (uid: string, anneeId: string) => {
   try {
-    let inscriptions: any[] = [];
-    let paiements: any[] = [];
-    let listeEnseignants: any[] = [];
-    let listeClasses: any[] = [];
-    let classesCount = 0;
+    // 1. Récupération globale depuis Dexie
+    const [
+      inscriptionsLocales,
+      elevesLocaux,
+      paiementsLocaux,
+      enseignantsLocaux,
+      classesLocales,
+    ] = await Promise.all([
+      db["gs_inscriptions"].where("annee_id").equals(Number(anneeId)).toArray(),
+      db["gs_eleves"].where("utilisateur_id").equals(uid).toArray(),
+      db["gs_paiements"].where("utilisateur_id").equals(uid).toArray(),
+      db["gs_enseignants"].where("utilisateur_id").equals(uid).toArray(),
+      db["gs_classes"].where("annee_id").equals(Number(anneeId)).toArray(),
+    ]);
 
-    if (navigator.onLine) {
-      // ==========================
-      // CHARGEMENT PARALLÈLE
-      // ==========================
-      const [insResult, profResult, clsResult] = await Promise.all([
-        supabase
-          .from("gs_inscriptions")
-          .select(`
-            id,
-            scolarite_totale,
-            classe_id,
-            numero_matricule,
-            gs_classes (
-              nom,
-              niveau
-            ),
-            gs_eleves (
-              nom,
-              prenom,
-              telephone_parent,
-              nom_parent
-            ),
-            gs_paiements (
-              inscription_id,
-              montant
-            )
-          `)
-          .eq("utilisateur_id", uid)
-          .eq("annee_id", anneeId),
+    // 2. 🚨 SÉCURISATION DU CACHE DU DASHBOARD : ON FILTRE TOUT SUR LE STATUT SYNCHRONISÉ
+    // Le Dashboard ignore complètement les nouveaux inserts locaux ("local" ou "pending")
+    const classesCache = classesLocales.filter(
+      (c: any) => c.utilisateur_id === uid && (c.statut_synchro === "synced" || c.statut_synchro === "synchronise")
+    );
+    
+    const enseignantsCache = enseignantsLocaux.filter(
+      (e: any) => (e.statut_synchro === "synced" || e.statut_synchro === "synchronise")
+    );
 
-        supabase
-          .from("gs_enseignants")
-          .select("id, nom, prenom, telephone, specialite")
-          .eq("utilisateur_id", uid),
+    const classesMap = new Map(classesCache.map((c: any) => [c.id, c]));
+    const elevesCacheMap = new Map(
+      elevesLocaux
+        .filter((e: any) => e.statut_synchro === "synced" || e.statut_synchro === "synchronise")
+        .map((e: any) => [e.id, e])
+    );
 
-        supabase
-          .from("gs_classes")
-          .select("id, nom, niveau", { count: "exact" })
-          .eq("utilisateur_id", uid)
-          .eq("annee_id", anneeId)
-          .order("nom"),
-      ]);
+    // Filtrage des inscriptions synchronisées
+    const inscriptionsCache = inscriptionsLocales.map((ins: any) => {
+      const cl = classesMap.get(ins.classe_id) as any;
+      const el = elevesCacheMap.get(ins.eleve_id) as any;
+      return {
+        ...ins,
+        gs_classes: cl ? { nom: cl.nom, niveau: cl.niveau } : null,
+        gs_eleves: el ? { nom: el.nom, prenom: el.prenom } : null,
+      };
+    }).filter(
+      (i: any) => i.utilisateur_id === uid && i.gs_eleves !== null && (i.statut_synchro === "synced" || i.statut_synchro === "synchronise")
+    );
 
-      const insData = insResult.data || [];
+    const idsCache = new Set<any>((inscriptionsCache || []).map((i: any) => i.id));
+    
+    // Filtrage des paiements synchronisés
+    const paiementsCache = paiementsLocaux.filter(
+      (p: any) => idsCache.has(p.inscription_id) && (p.statut_synchro === "synced" || p.statut_synchro === "synchronise")
+    );
 
-      inscriptions = insData.map(
-        ({ gs_paiements, ...reste }: any) => reste
-      );
+    // Mettre à jour l'état des classes pour les filtres du Dashboard (uniquement le cache)
+    setClasses(classesCache);
 
-      paiements = insData.flatMap(
-        (ins: any) => ins.gs_paiements || []
-      );
-
-      listeEnseignants = profResult.data || [];
-      listeClasses = clsResult.data || [];
-      classesCount = clsResult.count || 0;
-    } else {
-      // ==========================
-      // HORS LIGNE (DEXIE)
-      // ==========================
-
-      const [
-        inscriptionsLocales,
-        elevesLocaux,
-        paiementsLocaux,
-        enseignantsLocaux,
-        classesLocales,
-      ] = await Promise.all([
-        db["gs_inscriptions"]
-          .where("annee_id")
-          .equals(Number(anneeId))
-          .toArray(),
-
-        db["gs_eleves"]
-          .where("utilisateur_id")
-          .equals(uid)
-          .toArray(),
-
-        db["gs_paiements"]
-          .where("utilisateur_id")
-          .equals(uid)
-          .toArray(),
-
-        db["gs_enseignants"]
-          .where("utilisateur_id")
-          .equals(uid)
-          .toArray(),
-
-        db["gs_classes"]
-          .where("annee_id")
-          .equals(Number(anneeId))
-          .toArray(),
-      ]);
-
-      listeClasses = classesLocales;
-      classesCount = classesLocales.length;
-      listeEnseignants = enseignantsLocaux;
-
-      // Maps beaucoup plus rapides que find()
-
-      const classesMap = new Map(
-        listeClasses.map((c: any) => [c.id, c])
-      );
-
-      const elevesMap = new Map(
-        elevesLocaux.map((e: any) => [e.id, e])
-      );
-
-              inscriptions = inscriptionsLocales.map((ins: any) => {
-        // En ajoutant "as any", TypeScript accepte toutes les propriétés (nom, prenom, etc.) sans râler
-        const cl = classesMap.get(ins.classe_id) as any;
-        const el = elevesMap.get(ins.eleve_id) as any;
-
-        return {
-          ...ins,
-          gs_classes: cl
-            ? {
-                nom: cl.nom,
-                niveau: cl.niveau,
-              }
-            : null,
-          gs_eleves: el
-            ? {
-                nom: el.nom,
-                prenom: el.prenom,
-                telephone_parent: el.telephone_parent,
-                nom_parent: el.nom_parent,
-              }
-            : null,
-        };
-      });
-
-      // Set beaucoup plus rapide que includes()
-
-      const ids = new Set(inscriptions.map((i) => i.id));
-
-      paiements = paiementsLocaux.filter((p: any) =>
-        ids.has(p.inscription_id)
-      );
-    }
-
-    setClasses(listeClasses);
-
+    // Injection dans l'état du Dashboard
     setRawEleves({
-      inscriptions,
-      paiements,
-      enseignants: listeEnseignants.length,
-      classes: classesCount,
+      inscriptions: inscriptionsCache, // 🔒 Figé sur le cache
+      paiements: paiementsCache,       // 🔒 Figé sur le cache
+      enseignants: enseignantsCache.length, // 🔒 Figé sur le cache
+      classes: classesCache.length,     // 🔒 Figé sur le cache
     });
+
   } catch (e) {
-    console.error("Erreur de chargement des données scolaires :", e);
+    console.error("Erreur de verrouillage du cache Dashboard :", e);
   }
 };
-  // ==========================================
-  // 💳 SÉCURISATION HYBRIDE : LOAD FACTURE DATA
-  // ==========================================
- const loadFactureData = async (uid: string) => {
+
+
+
+// ==========================================
+// 💳 CHARGEMENT DU CACHE LOCAL (FACTURATION)
+// ==========================================
+const loadFactureData = async (uid: string) => {
   try {
-    let factures: any[] = [];
-    let produits: any[] = [];
+    // 💡 LECTURE UNIQUE ET EXCLUSIVE DE DEXIE
+    const [facturesLocales, produitsLocaux] = await Promise.all([
+      db["gf_factures"].where("utilisateur_id").equals(uid).toArray(),
+      db["gf_produits"].where("utilisateur_id").equals(uid).toArray(),
+    ]);
 
-    if (navigator.onLine) {
-
-      const [facturesResult, produitsResult] = await Promise.all([
-
-        supabase
-          .from("gf_factures")
-          .select("id, total_ht, total_ttc, benefice_realise, statut")
-          .eq("utilisateur_id", uid),
-
-        supabase
-          .from("gf_produits")
-          .select("id, prix_achat, stock_actuel, stock_alerte")
-          .eq("utilisateur_id", uid),
-
-      ]);
-
-      factures = facturesResult.data || [];
-      produits = produitsResult.data || [];
-
-    } else {
-
-      const [facturesLocales, produitsLocaux] = await Promise.all([
-
-        db["gf_factures"]
-          .where("utilisateur_id")
-          .equals(uid)
-          .toArray(),
-
-        db["gf_produits"]
-          .where("utilisateur_id")
-          .equals(uid)
-          .toArray(),
-
-      ]);
-
-      factures = facturesLocales;
-      produits = produitsLocaux;
-    }
-
-    const alertesCount = produits.filter(
-      (p: any) =>
-        Number(p.stock_actuel) <= Number(p.stock_alerte)
+    const alertesCount = produitsLocaux.filter(
+      (p: any) => Number(p.stock_actuel) <= Number(p.stock_alerte)
     ).length;
 
-    const totalValeurStock = produits.reduce(
-      (sum: number, p: any) =>
-        sum +
-        (Number(p.prix_achat) || 0) *
-        (Number(p.stock_actuel) || 0),
+    const totalValeurStock = produitsLocaux.reduce(
+      (sum: number, p: any) => sum + (Number(p.prix_achat) || 0) * (Number(p.stock_actuel) || 0),
       0
     );
 
-    const totalCA = factures.reduce(
-      (sum: number, f: any) =>
-        sum + (Number(f.total_ht) || 0),
+    const totalCA = facturesLocales.reduce(
+      (sum: number, f: any) => sum + (Number(f.total_ht) || 0),
       0
     );
 
-    const totalMarge = factures.reduce(
-      (sum: number, f: any) =>
-        sum + (Number(f.benefice_realise) || 0),
+    const totalMarge = facturesLocales.reduce(
+      (sum: number, f: any) => sum + (Number(f.benefice_realise) || 0),
       0
     );
 
     setRawFacturation({
-      factures,
-      produits,
+      factures: facturesLocales,
+      produits: produitsLocaux,
       alertesStock: alertesCount,
       valeurStock: totalValeurStock,
       chiffreAffaires: totalCA,
       margeTotale: totalMarge,
     });
 
-    return {
-      alertesCount,
-      totalValeurStock,
-      totalCA,
-      totalMarge,
-    };
-
+    return { alertesCount, totalValeurStock, totalCA, totalMarge };
   } catch (e) {
-
-    console.error(e);
-
-    return {
-      alertesCount: 0,
-      totalValeurStock: 0,
-      totalCA: 0,
-      totalMarge: 0,
-    };
+    console.error("Erreur lors de la lecture du cache facture :", e);
+    return { alertesCount: 0, totalValeurStock: 0, totalCA: 0, totalMarge: 0 };
   }
 };
+
+
+
+useEffect(() => {
+  if (!userId || !currentAnnee) return;
+
+  // Charge instantanément les données locales au démarrage de la page
+  loadSchoolData(userId, currentAnnee);
+  loadFactureData(userId);
+
+  const handleOnlineSync = async () => {
+    console.log("🌐 Internet détecté : synchronisation montante et descendante lancée...");
+    
+    // Pousse le local vers Supabase, rafraîchit Dexie depuis Supabase
+    await executionSynchronisationGlobale(userId, currentAnnee);
+
+    // Réaffiche les données rafraîchies à l'écran
+    await loadSchoolData(userId, currentAnnee);
+    await loadFactureData(userId);
+  };
+
+  window.addEventListener("online", handleOnlineSync);
+  return () => window.removeEventListener("online", handleOnlineSync);
+}, [userId, currentAnnee]);
+
 
   // ==========================================
   // ⚡ ORCHESTRATION DU DASHBOARD (FAST FALLBACK)
@@ -756,21 +695,24 @@ useEffect(() => {
         ? Math.round(totalAttendu / totalInscritsClasse)
         : 0;
 
-    const schoolKpis = [
+        const schoolKpis = [
       {
         title: "Nombre élèves",
-        value: totalInscritsAffiches,
+        // 🔒 Figé sur la longueur du tableau filtré par le cache synchronisé
+        value: rawEleves.inscriptions.length, 
         moduleName: "GreenSchool",
         color: "text-purple-600",
       },
       {
         title: "Nombre enseignants",
-        value: rawEleves.enseignants,
+        // 🔒 Figé sur la valeur du cache synchronisé
+        value: rawEleves.enseignants, 
         moduleName: "GreenSchool",
         color: "text-blue-600",
       },
       {
         title: "Nombre Classes",
+        // 🔒 Figé sur la valeur du cache synchronisé
         value: rawEleves.classes,
         moduleName: "GreenSchool",
         color: "text-cyan-600",
@@ -896,9 +838,11 @@ useEffect(() => {
 }, [rawFacturation, activeServices, loading]);
 
 
-  if (loading) {
+ if (loading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-pulse">
+      
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-pulse">
+        <div className="h-32 bg-slate-200 dark:bg-slate-800 rounded-xl"></div>
         <div className="h-32 bg-slate-200 dark:bg-slate-800 rounded-xl"></div>
         <div className="h-32 bg-slate-200 dark:bg-slate-800 rounded-xl"></div>
         <div className="h-32 bg-slate-200 dark:bg-slate-800 rounded-xl"></div>
@@ -982,14 +926,20 @@ useEffect(() => {
       </div>
     </div>
 
-    {/* Grille unifiée de tous les KPIs (Reste identique à votre code) */}
+    {/* Grille unifiée de tous les KPIs */}
     {kpis.length > 0 ? (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {kpis.map((kpi, index) => (
-          <div key={index} className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm flex flex-col justify-between">
+          <div 
+            key={index} 
+            className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm flex flex-col justify-between transition-transform active:scale-98"
+          >
             <div>
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{kpi.title}</p>
-              <p className={`text-3xl font-bold mt-2 ${kpi.color}`}>{kpi.value}</p>
+              {/* 📱 CORRECTION : text-xl sur téléphone, text-2xl sur tablette (sm), text-3xl sur PC (lg) pour éviter les débordements */}
+              <p className={`text-xl sm:text-2xl lg:text-3xl font-bold mt-2 break-words ${kpi.color}`}>
+                {kpi.value}
+              </p>
             </div>
             <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-4 pt-2 border-t border-slate-100 dark:border-slate-800/60 flex items-center">
               🏷️ Module : <span className="font-semibold ml-1 text-slate-700 dark:text-slate-300">{kpi.moduleName}</span>
