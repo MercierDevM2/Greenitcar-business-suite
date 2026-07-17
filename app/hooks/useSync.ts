@@ -51,6 +51,7 @@ export async function declencherSynchronisation() {
         utilisateur_id: facture.utilisateur_id,
         client_nom: facture.client_nom,
         total_ttc: facture.total_ttc,
+        total_ht: facture.total_ht,
         benefice_realise: facture.benefice_realise,
         statut: facture.statut,
         created_at: facture.cree_le
@@ -79,6 +80,7 @@ export async function declencherSynchronisation() {
         nom: prod.nom,
         prix_achat: prod.prix_achat,
         prix_vente: prod.prix_vente,
+        stock_initial: prod.stock_initial || prod.stock_actuel,
         stock_actuel: prod.stock_actuel,
         stock_alerte: prod.stock_alerte
       };

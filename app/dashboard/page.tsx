@@ -179,40 +179,73 @@ export default function DashboardPage() {
 };
 
 
-
-// ==========================================
-// 💳 CHARGEMENT DU CACHE LOCAL (FACTURATION)
-// ==========================================
 const loadFactureData = async (uid: string) => {
   try {
-    // 💡 LECTURE UNIQUE ET EXCLUSIVE DE DEXIE
-    const [facturesLocales, produitsLocaux] = await Promise.all([
+    // 💡 LECTURE DU CACHE SYNCHRONISÉ UNIQUEMENT
+    const [facturesLocales, produitsLocaux, itemsFacturesLocaux] = await Promise.all([
       db["gf_factures"].where("utilisateur_id").equals(uid).toArray(),
       db["gf_produits"].where("utilisateur_id").equals(uid).toArray(),
+      db["gf_facture_items"] ? db["gf_facture_items"].where("utilisateur_id").equals(uid).toArray() : Promise.resolve([]),
     ]);
 
-    const alertesCount = produitsLocaux.filter(
-      (p: any) => Number(p.stock_actuel) <= Number(p.stock_alerte)
-    ).length;
+    // 🔄 MODIFICATION : On accepte aussi le statut "local" pour que l'affichage réagisse tout de suite
+const facturesCache = facturesLocales.filter(
+  (f: any) => 
+    f.statut_synchro === "synced" || 
+    f.statut_synchro === "synchronise" || 
+    f.statut_synchro === "local" // 
+);
 
-    const totalValeurStock = produitsLocaux.reduce(
-      (sum: number, p: any) => sum + (Number(p.prix_achat) || 0) * (Number(p.stock_actuel) || 0),
-      0
+
+    const produitsCache = produitsLocaux.filter(
+      (p: any) => p.statut_synchro === "synced" || p.statut_synchro === "synchronise"
     );
 
-    const totalCA = facturesLocales.reduce(
+    const itemsCache = itemsFacturesLocaux.filter(
+      (i: any) => i.statut_synchro === "synced" || i.statut_synchro === "synchronise"
+    );
+
+    // 🔄 MAP DES QUANTITÉS SORTIES PAR PRODUIT
+    const quantitesSortiesMap = new Map<string, number>();
+    itemsCache.forEach((item: any) => {
+      // On ne décompte que les items liés à des factures validées/synchronisées
+      const factureAssociee = facturesCache.find((f: any) => f.id === item.facture_id);
+
+      if (factureAssociee) {
+        const qteActuelle = quantitesSortiesMap.get(item.produit_id) || 0;
+        quantitesSortiesMap.set(item.produit_id, qteActuelle + (Number(item.quantite) || 0));
+      }
+    });
+
+    // 📊 CALCULS STOCKS AVEC DÉCOMPTE AUTOMATIQUE
+    let alertesCount = 0;
+    let totalValeurStock = 0;
+
+    produitsCache.forEach((p: any) => {
+      const qteSortie = quantitesSortiesMap.get(p.id) || 0;
+      // Le stock dynamique prend en compte le stock initial moins les sorties
+      const stockDynamique = Math.max(0, (Number(p.stock_initial) || Number(p.stock_actuel) || 0) - qteSortie);
+
+      if (stockDynamique <= (Number(p.stock_alerte) || 0)) {
+        alertesCount++;
+      }
+      totalValeurStock += (Number(p.prix_achat) || 0) * stockDynamique;
+    });
+
+    // 💰 CALCULS FINANCIERS SANS TVA (HT uniquement)
+    const totalCA = facturesCache.reduce(
       (sum: number, f: any) => sum + (Number(f.total_ht) || 0),
       0
     );
 
-    const totalMarge = facturesLocales.reduce(
+    const totalMarge = facturesCache.reduce(
       (sum: number, f: any) => sum + (Number(f.benefice_realise) || 0),
       0
     );
 
     setRawFacturation({
-      factures: facturesLocales,
-      produits: produitsLocaux,
+      factures: facturesCache,
+      produits: produitsCache,
       alertesStock: alertesCount,
       valeurStock: totalValeurStock,
       chiffreAffaires: totalCA,
@@ -221,10 +254,11 @@ const loadFactureData = async (uid: string) => {
 
     return { alertesCount, totalValeurStock, totalCA, totalMarge };
   } catch (e) {
-    console.error("Erreur lors de la lecture du cache facture :", e);
+    console.error("Erreur lors de la lecture du cache facture/stock :", e);
     return { alertesCount: 0, totalValeurStock: 0, totalCA: 0, totalMarge: 0 };
   }
 };
+
 
 
 
@@ -250,7 +284,6 @@ useEffect(() => {
   return () => window.removeEventListener("online", handleOnlineSync);
 }, [userId, currentAnnee]);
 
-
   // ==========================================
   // ⚡ ORCHESTRATION DU DASHBOARD (FAST FALLBACK)
   // ==========================================
@@ -274,338 +307,194 @@ useEffect(() => {
       }
 
       if (navigator.onLine) {
-        (async () => {
-          try {
-            const { data: { user }, error } = await supabase.auth.getUser();
-            if (!error && user) {
-              activeUid = user.id;
-              const { data: userData } = await supabase.from("utilisateurs").select("services_choisis").eq("id", user.id).single();
-              
-              if (userData?.services_choisis) {
-                services = userData.services_choisis;
-                setActiveServices(services);
-                await calculerKpisLocaux(activeUid, services);
-              }
+        try {
+          const { data: { user }, error } = await supabase.auth.getUser();
+          if (!error && user) {
+            activeUid = user.id;
+            const { data: userData } = await supabase
+              .from("utilisateurs")
+              .select("services_choisis")
+              .eq("id", user.id)
+              .single();
+            
+            if (userData?.services_choisis) {
+              services = userData.services_choisis;
+              setActiveServices(services);
+              await calculerKpisLocaux(activeUid, services);
             }
-          } catch (netError) {
-            console.log("Mode déconnecté en arrière-plan.");
-          } finally {
-            setLoading(false);
           }
-        })();
+        } catch (netError) {
+          console.log("Mode déconnecté en arrière-plan.");
+        } finally {
+          setLoading(false);
+        }
       } else {
         setLoading(false);
       }
     }
 
-    // ==========================================
-    // 📊 CALCUL ET AGREGATION DES COMPTEURS (DEXIE/CLOUD)
-    // ==========================================
-    async function calculerKpisLocaux(uid: string, activeServices: string[]) {
-  const localKpis: KpiCard[] = [];
+    buildSmartDashboard();
+  }, []); // ✅ Le premier useEffect se ferme proprement ICI.
 
-  const tasks: Promise<any>[] = [];
+  // ==========================================
+  // 📊 CALCUL ET AGREGATION DES COMPTEURS (DEXIE/CLOUD)
+  // ==========================================
+  async function calculerKpisLocaux(uid: string, activeServices: string[]) {
+    const localKpis: KpiCard[] = [];
+    const tasks: Promise<any>[] = [];
 
-  // =========================
-  // GREENFACTURE / GREENSTOCK
-  // =========================
-  if (
-    activeServices.includes("facture") ||
-    activeServices.includes("stock")
-  ) {
-    tasks.push(
-      (async () => {
-        const dataCommerce = await loadFactureData(uid);
+    // =========================
+    // GREENFACTURE / GREENSTOCK
+    // =========================
+    if (activeServices.includes("facture") || activeServices.includes("stock")) {
+      tasks.push(
+        (async () => {
+          const dataCommerce = await loadFactureData(uid);
 
-        if (activeServices.includes("facture")) {
-          localKpis.push(
-            {
-              title: "Chiffre d'Affaires HT",
-              value: `${dataCommerce.totalCA.toLocaleString()} FCFA`,
-              moduleName: "GreenFacture",
-              color: "text-emerald-600",
-            },
-            {
-              title: "Marge brute réalisée",
-              value: `${dataCommerce.totalMarge.toLocaleString()} FCFA`,
-              moduleName: "GreenFacture",
-              color: "text-sky-600",
-            }
-          );
-        }
+          if (activeServices.includes("facture")) {
+            localKpis.push(
+              {
+                title: "Chiffre d'Affaires HT",
+                value: `${dataCommerce.totalCA.toLocaleString("fr-FR")} FCFA`,
+                moduleName: "GreenFacture",
+                color: "text-emerald-600",
+              },
+              {
+                title: "Marge brute réalisée",
+                value: `${dataCommerce.totalMarge.toLocaleString("fr-FR")} FCFA`,
+                moduleName: "GreenFacture",
+                color: "text-sky-600",
+              }
+            );
+          }
 
-        if (activeServices.includes("stock")) {
-          localKpis.push(
-            {
-              title: "Valeur du Stock (Achat)",
-              value: `${dataCommerce.totalValeurStock.toLocaleString()} FCFA`,
-              moduleName: "GreenStock",
-              color: "text-indigo-600",
-            },
-            {
-              title: "Articles en alerte stock",
-              value: dataCommerce.alertesCount,
-              moduleName: "GreenStock",
-              color: "text-rose-600",
-            }
-          );
-        }
-      })()
-    );
-  }
+          if (activeServices.includes("stock")) {
+            localKpis.push(
+              {
+                title: "Valeur du Stock (Achat)",
+                value: `${dataCommerce.totalValeurStock.toLocaleString("fr-FR")} FCFA`,
+                moduleName: "GreenStock",
+                color: "text-indigo-600",
+              },
+              {
+                title: "Articles en alerte stock",
+                value: dataCommerce.alertesCount,
+                moduleName: "GreenStock",
+                color: "text-rose-600",
+              }
+            );
+          }
+        })()
+      );
+    }
 
-  // =========================
-  // GREENPERSONNEL
-  // =========================
-  if (activeServices.includes("personnel")) {
-    tasks.push(
-      (async () => {
-        let staffCount = 0;
+    // =========================
+    // GREENPOINTAGE
+    // =========================
+    if (activeServices.includes("pointage")) {
+      tasks.push(
+        (async () => {
+          const dateDuJour = new Date().toISOString().split("T")[0];
+          let latesCount = 0;
 
-        if (navigator.onLine) {
-          const { count } = await supabase
-            .from("gp_employes")
-            .select("*", { count: "exact", head: true })
-            .eq("utilisateur_id", uid);
-
-          staffCount = count || 0;
-        } else {
-          staffCount = await db["gp_employes"]
-            .where("utilisateur_id")
-            .equals(uid)
-            .count();
-        }
-
-        localKpis.push({
-          title: "Effectif Total",
-          value: staffCount,
-          moduleName: "GreenPersonnel",
-          color: "text-blue-600",
-        });
-      })()
-    );
-  }
-
-  // =========================
-  // GREENASSET
-  // =========================
-  if (activeServices.includes("asset")) {
-    tasks.push(
-      (async () => {
-        let assetsCount = 0;
-        let brokenCount = 0;
-
-        if (navigator.onLine) {
-          const [assetsResult, brokenResult] = await Promise.all([
-            supabase
-              .from("ga_patrimoine")
-              .select("*", { count: "exact", head: true })
-              .eq("utilisateur_id", uid),
-
-            supabase
-              .from("ga_patrimoine")
+          if (navigator.onLine) {
+            const { count } = await supabase
+              .from("gpt_pointages")
               .select("*", { count: "exact", head: true })
               .eq("utilisateur_id", uid)
-              .eq("statut_maintenance", "En panne"),
-          ]);
+              .eq("est_en_retard", true)
+              .eq("date_jour", dateDuJour);
 
-          assetsCount = assetsResult.count || 0;
-          brokenCount = brokenResult.count || 0;
-        } else {
-          const [assets, broken] = await Promise.all([
-            db["ga_patrimoine"]
+            latesCount = count || 0;
+          } else {
+            latesCount = await db["gpt_pointages"]
               .where("utilisateur_id")
               .equals(uid)
-              .count(),
-
-            db["ga_patrimoine"]
-              .where("utilisateur_id")
-              .equals(uid)
-              .filter((item: any) => item.statut_maintenance === "En panne")
-              .count(),
-          ]);
-
-          assetsCount = assets;
-          brokenCount = broken;
-        }
-
-        localKpis.push(
-          {
-            title: "Équipements Inventoriés",
-            value: assetsCount,
-            moduleName: "GreenAsset",
-            color: "text-slate-700",
-          },
-          {
-            title: "Matériels en Panne",
-            value: brokenCount,
-            moduleName: "GreenAsset",
-            color: "text-rose-600",
+              .filter((item: any) => item.est_en_retard === true && item.date_jour === dateDuJour)
+              .count();
           }
-        );
-      })()
-    );
-  }
 
-  // =========================
-  // GREENCLINIC
-  // =========================
-  if (activeServices.includes("clinic")) {
-    tasks.push(
-      (async () => {
-        let consultsCount = 0;
+          localKpis.push({
+            title: "Retards Aujourd'hui",
+            value: latesCount,
+            moduleName: "GreenPointage",
+            color: "text-orange-600",
+          });
+        })()
+      );
+    }
 
-        if (navigator.onLine) {
-          const { count } = await supabase
-            .from("gc_patients_consultations")
-            .select("*", { count: "exact", head: true })
-            .eq("utilisateur_id", uid)
-            .eq("type_evenement", "consultation_terminee");
+    // =========================
+    // DATA / ARCHIVE
+    // =========================
+    if (activeServices.includes("data") || activeServices.includes("archive")) {
+      tasks.push(
+        (async () => {
+          let totalDocsCount = 0;
 
-          consultsCount = count || 0;
-        } else {
-          consultsCount = await db["gc_patients_consultations"]
-            .where("utilisateur_id")
-            .equals(uid)
-            .filter(
-              (item: any) =>
-                item.type_evenement === "consultation_terminee"
-            )
-            .count();
-        }
+          if (navigator.onLine) {
+            const { count } = await supabase
+              .from("gd_missions_archives")
+              .select("*", { count: "exact", head: true })
+              .eq("utilisateur_id", uid);
 
-        localKpis.push({
-          title: "Consultations Effectuées",
-          value: consultsCount,
-          moduleName: "GreenClinic",
-          color: "text-cyan-600",
-        });
-      })()
-    );
-  }
+            totalDocsCount = count || 0;
+          } else {
+            totalDocsCount = await db["gd_missions_archives"]
+              .where("utilisateur_id")
+              .equals(uid)
+              .count();
+          }
 
-  // =========================
-  // GREENPOINTAGE
-  // =========================
-  if (activeServices.includes("pointage")) {
-    tasks.push(
-      (async () => {
-        const dateDuJour = new Date().toISOString().split("T")[0];
-        let latesCount = 0;
+          localKpis.push({
+            title: "Éléments Traités / Sécurisés",
+            value: totalDocsCount,
+            moduleName: "Business Data",
+            color: "text-violet-600",
+          });
+        })()
+      );
+    }
 
-        if (navigator.onLine) {
-          const { count } = await supabase
-            .from("gpt_pointages")
-            .select("*", { count: "exact", head: true })
-            .eq("utilisateur_id", uid)
-            .eq("est_en_retard", true)
-            .eq("date_jour", dateDuJour);
+    // =========================
+    // GREENSCHOOL
+    // =========================
+    if (activeServices.includes("school")) {
+      tasks.push(
+        (async () => {
+          let listeAnnees: any[] = [];
 
-          latesCount = count || 0;
-        } else {
-          latesCount = await db["gpt_pointages"]
-            .where("utilisateur_id")
-            .equals(uid)
-            .filter(
-              (item: any) =>
-                item.est_en_retard === true &&
-                item.date_jour === dateDuJour
-            )
-            .count();
-        }
+          if (navigator.onLine) {
+            const { data } = await supabase
+              .from("gs_annees_scolaires")
+              .select("id, libelle, active")
+              .eq("utilisateur_id", uid)
+              .order("id", { ascending: false });
 
-        localKpis.push({
-          title: "Retards Aujourd'hui",
-          value: latesCount,
-          moduleName: "GreenPointage",
-          color: "text-orange-600",
-        });
-      })()
-    );
-  }
+            listeAnnees = data || [];
+          } else {
+            listeAnnees = await db["gs_annees_scolaires"]
+              .where("utilisateur_id")
+              .equals(uid)
+              .toArray();
+          }
 
-  // =========================
-  // DATA / ARCHIVE
-  // =========================
-  if (
-    activeServices.includes("data") ||
-    activeServices.includes("archive")
-  ) {
-    tasks.push(
-      (async () => {
-        let totalDocsCount = 0;
+          if (listeAnnees.length > 0) {
+            setAnnees(listeAnnees);
+            const active = listeAnnees.find((a: any) => a.active) || listeAnnees[0];
+            setCurrentAnnee(active.id.toString());
+            await loadSchoolData(uid, active.id);
+          }
+        })()
+      );
+    }
 
-        if (navigator.onLine) {
-          const { count } = await supabase
-            .from("gd_missions_archives")
-            .select("*", { count: "exact", head: true })
-            .eq("utilisateur_id", uid);
+    // ⚡ ATTEND TOUS LES MODULES EN PARALLÈLE
+    await Promise.all(tasks);
 
-          totalDocsCount = count || 0;
-        } else {
-          totalDocsCount = await db["gd_missions_archives"]
-            .where("utilisateur_id")
-            .equals(uid)
-            .count();
-        }
-
-        localKpis.push({
-          title: "Éléments Traités / Sécurisés",
-          value: totalDocsCount,
-          moduleName: "Business Data",
-          color: "text-violet-600",
-        });
-      })()
-    );
-  }
-
-  // =========================
-  // GREENSCHOOL
-  // =========================
-  if (activeServices.includes("school")) {
-    tasks.push(
-      (async () => {
-        let listeAnnees: any[] = [];
-
-        if (navigator.onLine) {
-          const { data } = await supabase
-            .from("gs_annees_scolaires")
-            .select("id, libelle, active")
-            .eq("utilisateur_id", uid)
-            .order("id", { ascending: false });
-
-          listeAnnees = data || [];
-        } else {
-          listeAnnees = await db["gs_annees_scolaires"]
-            .where("utilisateur_id")
-            .equals(uid)
-            .toArray();
-        }
-
-        if (listeAnnees.length > 0) {
-          setAnnees(listeAnnees);
-
-          const active =
-            listeAnnees.find((a: any) => a.active) ||
-            listeAnnees[0];
-
-          setCurrentAnnee(active.id.toString());
-
-          await loadSchoolData(uid, active.id);
-        }
-      })()
-    );
-  }
-
-  // ⚡ ATTEND TOUS LES MODULES EN PARALLÈLE
-  await Promise.all(tasks);
-
-  // ⚡ UN SEUL RENDER REACT
-  setKpis(localKpis);
-}
-
-  buildSmartDashboard();
-}, []);
+    // ⚡ UN SEUL RENDER REACT
+    setKpis(localKpis);
+  } // ✅ La fonction calculerKpisLocaux se ferme proprement ICI.
 
   
   useEffect(() => {
@@ -688,30 +577,28 @@ useEffect(() => {
         ? ((totalEncaisse / totalAttendu) * 100).toFixed(1)
         : "0";
 
-    // Le panier moyen se base sur les élèves de la classe sélectionnée
+   // Vos variables qui fonctionnent déjà
     const totalInscritsClasse = inscriptionsParClasse.length;
     const panierMoyen =
       totalInscritsClasse > 0
         ? Math.round(totalAttendu / totalInscritsClasse)
         : 0;
 
-        const schoolKpis = [
-      {
-        title: "Nombre élèves",
-        // 🔒 Figé sur la longueur du tableau filtré par le cache synchronisé
-        value: rawEleves.inscriptions.length, 
-        moduleName: "GreenSchool",
-        color: "text-purple-600",
-      },
-      {
-        title: "Nombre enseignants",
-        // 🔒 Figé sur la valeur du cache synchronisé
-        value: rawEleves.enseignants, 
-        moduleName: "GreenSchool",
-        color: "text-blue-600",
-      },
-      {
-        title: "Nombre Classes",
+    const schoolKpis = [
+          {
+            title: "Nombre élèves",
+            value: inscriptionsParClasse.length, 
+            moduleName: "GreenSchool",
+            color: "text-purple-600",
+          },
+          {
+            title: "Nombre enseignants",
+            value: rawEleves.enseignants, 
+            moduleName: "GreenSchool",
+            color: "text-blue-600",
+        },
+        {
+          title: "Nombre Classes",
         // 🔒 Figé sur la valeur du cache synchronisé
         value: rawEleves.classes,
         moduleName: "GreenSchool",
@@ -762,80 +649,103 @@ useEffect(() => {
 
 
 useEffect(() => {
-  if (loading) return;
+  if (loading || !userId) return;
 
-  setKpis((prevKpis) => {
-    // On nettoie les anciens KPIs liés à la vente pour éviter les doublons
-    const sansVente = prevKpis.filter(
-      (kpi) => kpi.moduleName !== "GreenFacture" && kpi.moduleName !== "GreenStock"
-    );
+  // 🎯 FONCTION INTERNE ASYNCHRONE POUR ÉVITER TOUT CONFLIT DE TYPE REACT
+  async function actualiserKpis() {
+    try {
+      // 1. On récupère directement les produits depuis Dexie (Zéro problème de type !)
+      const produitsLocaux = await db.gf_produits.where("utilisateur_id").equals(userId).toArray();
+      const produits = produitsLocaux || [];
 
-    const aActiveFacture = activeServices.includes("facture");
-    const aActiveStock = activeServices.includes("stock");
+      setKpis((prevKpis: any[]) => {
+        const tableauPrecedent = prevKpis || [];
+        const sansVente = tableauPrecedent.filter(
+          (kpi: any) => kpi?.moduleName !== "GreenFacture" && kpi?.moduleName !== "GreenStock"
+        );
 
-    if (!aActiveFacture && !aActiveStock) return sansVente;
+        const aActiveFacture = activeServices.includes("facture");
+        const aActiveStock = activeServices.includes("stock");
 
-    const factures = rawFacturation.factures || [];
-    const produits = rawFacturation.produits || [];
+        if (!aActiveFacture && !aActiveStock) return sansVente;
 
-    // --- CALCULS FINANCIERS ---
-    const chiffreAffaires = factures.reduce((sum, f) => sum + (Number(f.total_ttc) || 0), 0);
-    const beneficeTotal = factures.reduce((sum, f) => sum + (Number(f.benefice_realise) || 0), 0);
-    const facturesImpayees = factures.filter(f => f.statut === "en_attente").length;
+        const factures = (rawFacturation && rawFacturation.factures) || [];
 
-    // --- CALCULS DU STOCK (Valorisation) ---
-    // Prix d'achat total du stock disponible en magasin (Capital immobilisé)
-    const valeurStockAchat = produits.reduce((sum, p) => sum + (Number(p.prix_achat) * Number(p.stock_actuel)), 0);
+        // --- CALCULS FINANCIERS ---
+        const chiffreAffaires = factures.reduce((sum: number, f: any) => sum + (Number(f?.total_ttc) || 0), 0);
+        const beneficeTotal = factures.reduce((sum: number, f: any) => sum + (Number(f?.benefice_realise) || 0), 0);
+        const facturesImpayees = factures.filter((f: any) => f?.statut === "en_attente").length;
 
-    const venteKpis = [];
+        // --- CALCULS DU STOCK (Valorisation depuis Dexie) ---
+        const valeurStockAchat = produits.reduce((sum: number, p: any) => {
+          const prixAchat = Number(p?.prix_achat) || 0;
+          const stockActuel = Number(p?.stock_actuel) || 0;
+          return sum + (prixAchat * stockActuel);
+        }, 0);
+
+        // --- CALCUL DES ALERTES STOCK (Depuis Dexie) ---
+        const nbProduitsEnAlerte = produits.filter((p: any) => {
+          const stock = Number(p?.stock_actuel) || 0;
+          const seuil = Number(p?.stock_alerte) || 0;
+          return stock <= seuil;
+        }).length;
+
+        const venteKpis: any[] = [];
 
         // KPIs dédiés à la Facturation / Caisse
-    // Affiché si l'un ou l'autre est activé
-    if (aActiveFacture || aActiveStock) {
-      venteKpis.push(
-        {
-          title: "Chiffre d'Affaires (TTC)",
-          value: `${chiffreAffaires.toLocaleString("fr-FR")} FCFA`,
-          moduleName: "GreenFacture",
-          color: "text-indigo-600",
-        },
-        {
-          title: "Bénéfice Réalisé",
-          value: `${beneficeTotal.toLocaleString("fr-FR")} FCFA`,
-          moduleName: "GreenFacture",
-          color: "text-emerald-600",
-        },
-        {
-          title: "Factures en Attente",
-          value: `${facturesImpayees} facture(s)`,
-          moduleName: "GreenFacture",
-          color: "text-rose-600",
+        if (aActiveFacture || aActiveStock) {
+          venteKpis.push(
+            {
+              title: "Chiffre d'Affaires (TTC)",
+              value: `${chiffreAffaires.toLocaleString("fr-FR")} FCFA`,
+              moduleName: "GreenFacture",
+              color: "text-indigo-600",
+            },
+            {
+              title: "Bénéfice Réalisé",
+              value: `${beneficeTotal.toLocaleString("fr-FR")} FCFA`,
+              moduleName: "GreenFacture",
+              color: "text-emerald-600",
+            },
+            {
+              title: "Factures en Attente",
+              value: `${facturesImpayees} facture(s)`,
+              moduleName: "GreenFacture",
+              color: "text-rose-600",
+            }
+          );
         }
-      );
-    }
 
-    // KPIs dédiés aux Articles / Marchandises
-    // Affiché aussi dès que l'un des deux services est actif
-    if (aActiveFacture || aActiveStock) {
-      venteKpis.push(
-        {
-          title: "Valeur du Stock (Achat)",
-          value: `${valeurStockAchat.toLocaleString("fr-FR")} FCFA`,
-          moduleName: "GreenStock",
-          color: "text-slate-700",
-        },
-        {
-          title: "Articles en alerte stock",
-          value: rawFacturation.alertesStock,
-          moduleName: "GreenStock",
-          color: "text-amber-600",
+        // KPIs dédiés aux Articles / Marchandises
+        if (aActiveFacture || aActiveStock) {
+          venteKpis.push(
+            {
+              title: "Valeur du Stock (Achat)",
+              value: `${valeurStockAchat.toLocaleString("fr-FR")} FCFA`,
+              moduleName: "GreenStock",
+              color: "text-slate-700",
+            },
+            {
+              title: "Articles en alerte stock",
+              value: `${nbProduitsEnAlerte} article(s)`,
+              moduleName: "GreenStock",
+              color: "text-amber-600",
+            }
+          );
         }
-      );
-    }
 
-    return [...sansVente, ...venteKpis];
-  });
-}, [rawFacturation, activeServices, loading]);
+        return [...sansVente, ...venteKpis];
+      });
+    } catch (err) {
+      console.error("Erreur lors du calcul des KPIs depuis Dexie", err);
+    }
+  }
+
+    actualiserKpis();
+
+// 🎯 On écoute uniquement rawFacturation pour déclencher la relecture de Dexie
+}, [rawFacturation, activeServices, loading, userId]);
+
 
 
  if (loading) {
@@ -863,9 +773,19 @@ useEffect(() => {
         {activeServices.includes("facture") && (
           <button
             onClick={() => router.push("/dashboard/saisies?module=facture")}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-xl shadow-sm transition-colors"
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-xl shadow-sm transition-colors w-full sm:w-auto"
           >
             ➕ Nouvelle Facture
+          </button>
+        )}
+
+        {/* 📦 AJOUT : BOUTON D'ACTION RAPIDE POUR LE STOCK */}
+        {(activeServices.includes("facture") || activeServices.includes("stock")) && (
+          <button
+            onClick={() => router.push("/dashboard/parametres/stock")}
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-semibold text-sm rounded-xl shadow-sm transition-colors border border-slate-200 dark:border-slate-700 w-full sm:w-auto"
+          >
+            📦 Ajouter un article
           </button>
         )}
 

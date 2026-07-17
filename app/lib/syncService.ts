@@ -115,3 +115,59 @@ export async function executionSynchronisationGlobale(userId: string, anneeId: s
     console.error("Échec synchro globale :", error);
   }
 }
+
+export const synchroniserFacturesVersCloud = async (userId: string): Promise<void> => {
+  try {
+    console.log("Début de la synchronisation des factures pour :", userId);
+    const dexieDb = db as any;
+
+    // 1. Récupérer toutes les factures locales en attente
+    const facturesAEnvoyer = await dexieDb["gf_factures"]
+      .where("utilisateur_id")
+      .equals(userId)
+      .filter((item: any) => item.statut_synchro === "local")
+      .toArray();
+
+    if (facturesAEnvoyer.length === 0) {
+      console.log("📥 Aucune facture locale à synchroniser.");
+      return;
+    }
+
+    // 2. Préparer les données épurées (on retire le champ local 'statut_synchro')
+    const payloads = facturesAEnvoyer.map((facture: any) => {
+      return {
+        id: facture.id, // Garde l'ID numérique généré localement pour éviter les doublons
+        utilisateur_id: facture.utilisateur_id,
+        client_nom: facture.client_nom,
+        total_ttc: facture.total_ttc,
+        total_ht: facture.total_ht || facture.total_ttc, // Fallback si total_ht est absent
+        benefice_realise: facture.benefice_realise || 0,
+        statut: facture.statut || "payee",
+        created_at: facture.cree_le || new Date().toISOString()
+      };
+    });
+
+    // 3. Envoyer en masse (Bulk Upsert) vers Supabase
+    const { error } = await supabase
+      .from("gf_factures")
+      .upsert(payloads, { onConflict: "id" }); // Écrase ou insère selon l'identifiant unique
+
+    if (!error) {
+      // 4. Si Supabase valide la réception, on passe toutes ces factures en "synced" localement
+      const idsSynchronises = facturesAEnvoyer.map((f: any) => f.id);
+      
+      await dexieDb["gf_factures"]
+        .where("id")
+        .anyOf(idsSynchronises)
+        .modify({ statut_synchro: "synced" });
+
+      console.log(`✅ ${idsSynchronises.length} facture(s) synchronisée(s) avec succès sur le Cloud !`);
+    } else {
+      console.error("❌ Erreur Supabase lors de l'upsert des factures :", error.message);
+    }
+
+  } catch (error) {
+    console.error("Erreur critique lors de la synchronisation des factures :", error);
+  }
+};
+

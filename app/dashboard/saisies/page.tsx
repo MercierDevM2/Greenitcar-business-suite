@@ -11,6 +11,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
+
 function SaisieFormContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -32,6 +33,8 @@ function SaisieFormContent() {
     enseignants: 0,
     classes: 0,
   });
+
+  const [articlesCatalogue, setArticlesCatalogue] = useState<any[]>([]);
 
   // Authentification et fallback cache local
 useEffect(() => {
@@ -88,7 +91,7 @@ useEffect(() => {
   getAuth();
 }, []);
 
-  // Chargement hybride (Dexie en priorité pour le mode hors-ligne)
+    // Chargement hybride (Dexie en priorité pour le mode hors-ligne)
   useEffect(() => {
     async function chargerDonnees() {
       try {
@@ -99,25 +102,53 @@ useEffect(() => {
         const classesLocales = await db.gs_classes.toArray();
         setClasses(classesLocales);
 
+        // 📦 CHARGEMENT SPÉCIFIQUE DU CATALOGUE POUR GREENFACTURE
+if (currentModule === "facture") {
+  const prodsLocaux = await db.gf_produits.where("utilisateur_id").equals(userId).toArray();
+  const filtrés = prodsLocaux.filter((p: any) => 
+    !p.statut_synchro || ["synced", "synchronise", "local"].includes(p.statut_synchro)
+  );
+  setArticlesCatalogue(filtrés);
+
+  // 🎯 CALCUL DES ALERTES DE STOCK INITIALES
+  const alertesInitiales = filtrés.filter((p: any) => {
+    const stock = Number(p.stock_actuel) || 0;
+    const seuil = Number(p.stock_alerte) || 0;
+    return stock <= seuil;
+  }).length;
+
+  const facturesLocales = await db.gf_factures.where("utilisateur_id").equals(userId).toArray();
+
+  // 🔥 SOLUTION TECHNIQUE : On injecte les données dans l'état fonctionnel du composant
+  if (typeof setRawEleves === "function") {
+    setRawEleves((prev: any) => ({
+      ...prev,
+      factures: facturesLocales || [],
+      produits: filtrés,
+      alertesStock: `${alertesInitiales} article(s)`
+    }));
+  }
+}
+
+
+
         if (currentModule === "school_paiement") {
           const inscriptionsLocales = await db.gs_inscriptions.where("utilisateur_id").equals(userId).toArray();
           const elevesLocaux = await db.gs_eleves.where("utilisateur_id").equals(userId).toArray();
           const paiementsLocaux = await db.gs_paiements.where("utilisateur_id").equals(userId).toArray();
 
           const UIComputed = inscriptionsLocales.map((ins: any) => {
-          // Ajout du type (: any) sur chaque paramètre pour calmer le compilateur
-          const cl = classesLocales.find((c: any) => c.id === ins.classe_id);
-          const el = elevesLocaux.find((e: any) => e.id === ins.eleve_id);
-          const pm = paiementsLocaux.filter((p: any) => p.inscription_id === ins.id);
+            const cl = classesLocales.find((c: any) => c.id === ins.classe_id);
+            const el = elevesLocaux.find((e: any) => e.id === ins.eleve_id);
+            const pm = paiementsLocaux.filter((p: any) => p.inscription_id === ins.id);
 
-          return {
-            ...ins,
-            // Utilisation d'une sécurité optionnelle (?.) au cas où la classe ou l'élève n'existe pas localement
-            gs_classes: cl ? { nom: cl.nom } : null,
-            gs_eleves: el ? { nom: el.nom, prenom: el.prenom } : null,
-            gs_paiements: (pm || []).map((p: any) => ({ montant: p.montant }))
-          };
-        });
+            return {
+              ...ins,
+              gs_classes: cl ? { nom: cl.nom } : null,
+              gs_eleves: el ? { nom: el.nom, prenom: el.prenom } : null,
+              gs_paiements: (pm || []).map((p: any) => ({ montant: p.montant }))
+            };
+          });
 
           setRawEleves((prev) => ({ ...prev, inscriptions: UIComputed }));
         }
@@ -143,19 +174,21 @@ useEffect(() => {
     if (userId) chargerDonnees();
   }, [userId, currentModule]);
 
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-     const handleSubmit = async (e: React.FormEvent) => {
+      const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!userId) return;
     setSaving(true);
     setStatus(null);
 
-    // 💡 Récupération de secours directe depuis le DOM si le state formData est incomplet
-    const target = e.target as HTMLFormElement;
-    const currentForm = new FormData(target);
+    // 🎯 Solution : On force la reconnaissance du type HTMLFormElement
+const target = e.target as HTMLFormElement;
+const currentForm = new FormData(target);
+
     
     const getVal = (name: string, fallback: string = "") => {
       return formData[name] || currentForm.get(name) || fallback;
@@ -171,40 +204,134 @@ useEffect(() => {
     };
 
     try {
-      switch (currentModule) {
-        case "facture":
-          tableName = "gf_factures";
-          const inputCA = Number(getVal("total_ht")) || Number(getVal("total_ttc")) || 0;
-          localData = {
-            ...localData,
-            client_nom: getVal("client_nom", "Client Comptant"),
-            total_ttc: inputCA,
-            benefice_realise: inputCA - (inputCA * 0.75),
-            statut: getVal("statut", "payee"),
-            cree_le: new Date().toISOString()
-          };
-          await db[tableName].put(localData);
-          break;
+            switch (currentModule) {
+               case "facture": {
+          tableName = "gf_factures"; 
+          
+          const factureId = crypto.randomUUID();
+          const totalHtCalculé = Number(getVal("total_ht")) || 0;
+          const quantiteVendue = Number(getVal("quantite")) || 1;
+          const prodId = getVal("produit_id");
 
-        case "stock":
+          // Calcul de la marge brute automatique
+          const produitConcerne = articlesCatalogue.find((p: any) => String(p.id) === String(prodId));
+          const prixAchatUnitaire = produitConcerne ? Number(produitConcerne.prix_achat) : 0;
+          const beneficeRealise = totalHtCalculé - (prixAchatUnitaire * quantiteVendue);
+
+          // Payload de la facture
+          const finalFactureData = {
+            id: factureId,
+            utilisateur_id: userId,
+            client_nom: getVal("client_nom", "Client Comptant"),
+            total_ttc: totalHtCalculé,
+            total_ht: totalHtCalculé,
+            benefice_realise: beneficeRealise,
+            statut: getVal("statut", "payee"),
+            cree_le: new Date().toISOString(),
+            statut_synchro: "local"
+          };
+
+          // Payload de l'item de facture
+          const localItemData = {
+            id: crypto.randomUUID(),
+            utilisateur_id: userId,
+            facture_id: factureId,
+            produit_id: prodId,
+            quantite: quantiteVendue,
+            prix_unitaire: Number(getVal("prix_unitaire")) || 0,
+            statut_synchro: "local"
+          };
+
+          if (!db[tableName] || !db["gf_facture_items"]) {
+            throw new Error(`La table ${tableName} ou gf_facture_items n'est pas configurée dans Dexie.`);
+          }
+
+          // 1. ÉCRITURE STRICTEMENT LOCALE (Comme stock et school)
+          await Promise.all([
+            db[tableName].put(finalFactureData),
+            db["gf_facture_items"].put(localItemData)
+          ]);
+
+          // 2. MISE À JOUR DU STOCK & ALERTE (En local)
+          if (produitConcerne) {
+            const stockActuel = Number(produitConcerne.stock_actuel) || 0;
+            const nouveauStock = stockActuel - quantiteVendue;
+            const seuilAlerte = Number(produitConcerne.stock_alerte) || 0;
+
+            // Décrémentation en base locale
+            await db["gf_produits"].update(prodId, { stock_actuel: nouveauStock });
+
+            // Notification UI instantanée pour le catalogue actuel
+            setArticlesCatalogue((prev) =>
+              (prev || []).map((art) =>
+                String(art.id) === String(prodId) ? { ...art, stock_actuel: nouveauStock } : art
+              )
+            );
+
+            // Alerte native
+            if (nouveauStock <= seuilAlerte) {
+              alert(`⚠️ ALERTE STOCK : "${produitConcerne.nom}" est bas (${nouveauStock} restants pour un seuil de ${seuilAlerte}).`);
+            }
+          }
+
+          // 3. SYNCHRONISATION SUPABASE EN ARRIÈRE-PLAN (Sans bloquer ni crasher l'UI)
+          if (navigator.onLine) {
+            (async () => {
+              try {
+                const { statut_synchro, cree_le, ...factureCloudBase } = finalFactureData;
+                const { statut_synchro: _, ...itemCloud } = localItemData;
+
+                const factureCloud = { ...factureCloudBase, created_at: cree_le };
+
+                const resFacture = await supabase.from("gf_factures").insert(factureCloud);
+                const resItem = await supabase.from("gf_facture_items").insert(itemCloud);
+
+                if (!resFacture.error && !resItem.error) {
+                  await Promise.all([
+                    db[tableName].update(factureId, { statut_synchro: "synchronise" }),
+                    db["gf_facture_items"].update(localItemData.id, { statut_synchro: "synchronise" })
+                  ]);
+                  console.log("✅ Facture synchronisée en tâche de fond !");
+                }
+              } catch (e) {
+                console.error("Échec de la synchro silencieuse", e);
+              }
+            })();
+          }
+
+          break;
+        }
+
+
+        case "stock": {
           tableName = "gf_produits";
-          localData = {
-            ...localData,
+          const quantiteInitiale = Number(getVal("stock_actuel")) || 0;
+          
+          const finalStockData = {
+            id: crypto.randomUUID(), // 🔥 Remplacement du nombre par un UUID String
+            utilisateur_id: userId,
             nom: getVal("nom_produit") || getVal("nom"),
             prix_achat: Number(getVal("prix_achat")) || 0,
             prix_vente: Number(getVal("prix_vente")) || 0,
-            stock_actuel: Number(getVal("stock_actuel")) || 0,
+            stock_initial: quantiteInitiale, 
+            stock_actuel: quantiteInitiale,
             stock_alerte: Number(getVal("stock_alerte")) || 5,
+            unite_mesure: getVal("unite_mesure", "Sac"),
+            statut_synchro: "local"
           };
-          await db[tableName].put(localData);
-          break;
 
-                case "school": {
-          // --- ÉCRITURE COMBINÉE COMPATIBLE HORS-LIGNE ---
+          if (!db[tableName]) {
+            throw new Error(`La table ${tableName} n'est pas configurée dans Dexie.`);
+          }
+
+          await db[tableName].put(finalStockData);
+          break;
+        }
+
+        case "school": {
           const eleveIdNum = idNumeriqueUnique();
           const inscriptionIdNum = idNumeriqueUnique();
 
-          // 1. Enregistrement de l'élève
           const nouvelEleve = {
             id: eleveIdNum,
             utilisateur_id: userId,
@@ -219,7 +346,6 @@ useEffect(() => {
           };
           await db.gs_eleves.put(nouvelEleve);
 
-          // 2. Enregistrement de l'inscription
           const nouvelleInscription = {
             id: inscriptionIdNum,
             utilisateur_id: userId,
@@ -233,63 +359,53 @@ useEffect(() => {
           };
           await db.gs_inscriptions.put(nouvelleInscription);
 
-          // 3. 💡 CAPTURE ET ENREGISTREMENT AUTOMATIQUE DE L'ACOMPTE
-          const montantAcompte = Number(formData.acompte) || Number(getVal("acompte")) || 0;
-
+          const montantAcompte = Number(getVal("acompte")) || 0;
           if (montantAcompte > 0) {
             const nouveauPaiementAcompte = {
-              id: idNumeriqueUnique(), // Génère un id entier unique bigint
+              id: idNumeriqueUnique(),
               utilisateur_id: userId,
-              inscription_id: inscriptionIdNum, // Lie le paiement à l'inscription que l'on vient de créer
-              montant: montantAcompte, // Injecte l'acompte dans la colonne montant attendue par Supabase
-              mode_paiement: getVal("mode_paiement") || "Espèces", // Récupère le mode s'il existe, sinon Espèces
-              reference: "Acompte Inscription", // Libellé automatique pour s'y retrouver
-              date_paiement: new Date().toISOString(),
+              inscription_id: inscriptionIdNum,
+              montant: montantAcompte,
+              date_paiement: new Date().toISOString().split("T")[0],
               statut_synchro: "local"
             };
-            
             await db.gs_paiements.put(nouveauPaiementAcompte);
-            console.log(`Acompte de ${montantAcompte} FCFA enregistré avec succès pour l'inscription ${inscriptionIdNum}`);
           }
           break;
         }
-
-
-          case "school_paiement": {
-          tableName = "gs_paiements";
-          
-          // Récupération sécurisée peu importe si le state ou le DOM l'a capturé
-          const montantSaisi = Number(formData.montant_paiement) || Number(getVal("montant_paiement")) || 0;
-          const referenceSaisie = formData.reference || getVal("reference") || null;
-          const modeSaisi = formData.mode_paiement || getVal("mode_paiement") || "Espèces";
-          const dateSaisie = formData.date_paiement || getVal("date_paiement") || new Date().toISOString();
-
-          localData = {
-            ...localData,
-            inscription_id: Number(formData.inscription_id) || Number(getVal("inscription_id")),
-            montant: montantSaisi, // Enregistre le chiffre saisi !
-            mode_paiement: modeSaisi,
-            reference: referenceSaisie, // Aligné sur la colonne 'reference' de Supabase
-            date_paiement: dateSaisie
-          };
-          
-          await db[tableName].put(localData);
-          break;
-        }
-
       }
 
-      setStatus({ type: "success", text: "Enregistré localement avec succès !" });
-      setFormData({});
-      target.reset(); // Vide visuellement les champs du formulaire HTML
-    } catch (error) {
-      console.error("Erreur insertion locale :", error);
-      setStatus({ type: "error", text: "Erreur de stockage local." });
+      setStatus({ type: "success", text: "Enregistrement local effectué avec succès !" });
+      // Logique optionnelle de push vers Supabase en arrière-plan ici...
+    } catch (err: any) {
+      console.error(err);
+      setStatus({ type: "error", text: "Erreur lors de l'enregistrement local." });
     } finally {
       setSaving(false);
     }
   };
 
+
+useEffect(() => {
+  async function chargerArticlesPourFacture() {
+    try {
+      if (db && db["gf_produits"]) {
+        const localProds = await db["gf_produits"].toArray();
+        const filtrés = localProds.filter((p: any) => 
+          !p.statut_synchro || 
+          ["synced", "synchronise", "local"].includes(p.statut_synchro)
+        );
+        setArticlesCatalogue(filtrés);
+      }
+    } catch (err) {
+      console.error("Erreur chargement articles:", err);
+    }
+  }
+  
+  if (currentModule === "facture") {
+    chargerArticlesPourFacture();
+  }
+}, [currentModule]);
 
 
 return (
@@ -307,7 +423,7 @@ return (
 
       <form onSubmit={handleSubmit} className="space-y-5">
         
-         {/* ==================== CONFIGURATION COMPTABILITÉ : GREENFACTURE ==================== */}
+            {/* ==================== CONFIGURATION COMPTABILITÉ : GREENFACTURE ==================== */}
       {currentModule === "facture" && (
         <div className="space-y-6">
           {/* Conteneur Facture Style "Papier" */}
@@ -326,7 +442,7 @@ return (
               </div>
             </div>
 
-                        {/* Informations Client */}
+            {/* Informations Client */}
             <div>
               <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
                 Nom du client / Entreprise *
@@ -342,37 +458,85 @@ return (
               />
             </div>
 
-             {/* AJOUT : Désignation de l'article acheté */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
-                Désignation de l'article acheté *
-              </label>
-              <input
-                type="text"
-                name="designation_produit"
-                required
-                value={formData.designation_produit || ""}
-                onChange={handleInputChange}
-                placeholder="ex: PC HP EliteBook, Sac de Ciment, Moto..."
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
-              />
+            {/* SÉLECTION DYNAMIQUE DE L'ARTICLE DEPUIS LE CATALOGUE */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                  Sélectionner l'article acheté *
+                </label>
+                <select
+                  name="produit_id"
+                  required
+                  value={formData.produit_id || ""}
+                  onChange={(e) => {
+                    const pId = e.target.value;
+                    const produitSelectionne = articlesCatalogue.find((p: any) => String(p.id) === String(pId));
+                    
+                    const prixVente = produitSelectionne ? Number(produitSelectionne.prix_vente) : 0;
+                    const designation = produitSelectionne ? produitSelectionne.nom : "";
+                    const qte = Number(formData.quantite) || 1;
+
+                    setFormData((prev: any) => ({
+                      ...prev,
+                      produit_id: pId,
+                      designation_produit: designation,
+                      prix_unitaire: prixVente,
+                      total_ht: prixVente * qte
+                    }));
+                  }}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
+                >
+                  <option value="">-- Choisir un produit du stock --</option>
+                  {articlesCatalogue.map((produit: any) => (
+                    <option key={produit.id} value={produit.id}>
+                      {produit.nom} ({Number(produit.prix_vente || 0).toLocaleString()} FCFA)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+
+              {/* CHAMP QUANTITÉ AVEC RECALCUL AUTOMATIQUE */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
+                  Quantité achetée *
+                </label>
+                <input
+                  type="number"
+                  name="quantite"
+                  min="1"
+                  required
+                  value={formData.quantite || "1"}
+                  onChange={(e) => {
+                    const qte = Number(e.target.value) || 1;
+                    const prixUnitaire = Number(formData.prix_unitaire) || 0;
+                    
+                    setFormData((prev: any) => ({
+                      ...prev,
+                      quantite: qte,
+                      total_ht: prixUnitaire * qte
+                    }));
+                  }}
+                  placeholder="ex: 5"
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
+                />
+              </div>
             </div>
 
-            {/* Détails du Montant */}
+            {/* Détails du Montant Net (SANS TVA) */}
             <div className="border-t border-dashed border-slate-200 dark:border-slate-800 pt-4 space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
-                  Montant Total de la vente (HT) *
+                  Montant Total Net de la vente *
                 </label>
                 <div className="relative">
                   <input
                     type="number"
                     name="total_ht"
                     required
+                    readOnly
                     value={formData.total_ht || ""}
-                    onChange={handleInputChange}
-                    placeholder="ex: 250000"
-                    className="w-full pl-4 pr-16 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:bg-white dark:focus:bg-slate-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors font-mono"
+                    className="w-full pl-4 pr-16 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white text-sm font-mono cursor-not-allowed outline-none"
                   />
                   <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 dark:text-slate-500">
                     FCFA
@@ -380,28 +544,20 @@ return (
                 </div>
               </div>
 
-              {/* Bloc de Ventilation Financière Automatique */}
+              {/* Récapitulatif épuré sans TVA */}
               {Number(formData.total_ht) > 0 && (
-                <div className="p-4 bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800/60 rounded-xl space-y-2 text-sm animate-fadeIn shadow-inner">
-                  <div className="flex justify-between text-slate-500 dark:text-slate-400">
-                    <span>Montant HT :</span>
-                    <span className="font-mono font-semibold">{(Number(formData.total_ht)).toLocaleString('fr-FR')} FCFA</span>
-                  </div>
-                  <div className="flex justify-between text-slate-500 dark:text-slate-400">
-                    <span>TVA Estimée (20%) :</span>
-                    <span className="font-mono font-semibold">{(Number(formData.total_ht) * 0.2).toLocaleString('fr-FR')} FCFA</span>
-                  </div>
-                  <div className="flex justify-between font-bold border-t border-slate-200 dark:border-slate-700 pt-2 text-slate-900 dark:text-white text-base">
-                    <span>Total à Payer (TTC) :</span>
-                    <span className="text-emerald-600 dark:text-emerald-400 font-mono font-bold">
-                      {(Number(formData.total_ht) * 1.2).toLocaleString('fr-FR')} FCFA
+                <div className="p-4 bg-emerald-500/5 dark:bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-2 text-sm animate-fadeIn shadow-inner">
+                  <div className="flex justify-between items-center font-bold text-slate-900 dark:text-white text-base">
+                    <span>Net à payer au comptant :</span>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-mono font-bold text-lg">
+                      {Number(formData.total_ht).toLocaleString('fr-FR')} FCFA
                     </span>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Paramètres de validation de la transaction */}
+            {/* Paramètres de règlement */}
             <div>
               <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
                 Mode de règlement & Statut
@@ -419,14 +575,14 @@ return (
 
           </div>
 
-          {/* Bouton d'Impression Direct de l'Aperçu Écran */}
+          {/* Bouton d'Impression */}
           <div className="flex justify-end pt-2">
             <button
               type="button"
               onClick={() => window.print()}
               className="text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-4 py-2.5 rounded-xl transition-all flex items-center justify-center gap-1.5 border border-slate-200 dark:border-slate-700/60 shadow-sm w-full sm:w-auto active:scale-98"
             >
-              🖨️ Imprimer cet aperçu client
+              🖨️ Imprimer cette facture client
             </button>
           </div>
         </div>

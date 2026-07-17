@@ -389,38 +389,39 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
         {/* Contenu de droite */}
         <div className="flex-1 flex flex-col min-w-0">
-          <header className="h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-8">
+                    <header className="h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-8">
             <div className="text-xs font-bold bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-full text-slate-600 dark:text-slate-300">
-              Espace Entreprise Activé
+              {/* 🎯 CORRECTIONS : Affiche le nom de l'entreprise ou un fallback si vide */}
+              🏢 Espace {nomEntreprise ? nomEntreprise : "Mon Entreprise"} Activé
             </div>
             
             {/* Badge de connectivité anti-délestage */}
-        <div className="flex items-center gap-4">
-          <button
-      onClick={() => router.back()} // Utilise l'historique du navigateur
-      className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-600 bg-white border rounded-md shadow-sm hover:bg-gray-50 transition"
-    >
-      ⬅️ Retour
-    </button>
-          <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold ${
-            isOnline 
-              ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/30" 
-              : "bg-amber-500/10 text-amber-500 border border-amber-500/30 animate-pulse"
-          }`}>
-            <span className={`w-2 h-2 rounded-full ${isOnline ? "bg-emerald-500" : "bg-amber-500"}`}></span>
-            {isOnline ? "En ligne" : "Mode local"}
-          </div>
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => router.back()} // Utilise l'historique du navigateur
+                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-600 bg-white border rounded-md shadow-sm hover:bg-gray-50 transition"
+              >
+                ⬅️ Retour
+              </button>
+              <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold ${
+                isOnline 
+                  ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/30" 
+                  : "bg-amber-500/10 text-amber-500 border border-amber-500/30 animate-pulse"
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${isOnline ? "bg-emerald-500" : "bg-amber-500"}`}></span>
+                {isOnline ? "En ligne" : "Mode local"}
+              </div>
 
-          {/* AVATAR DYNAMIQUE : Affiche l'initiale de l'entreprise */}
-          <div 
-            title={nomEntreprise} // Affiche le nom complet au survol de la souris
-            className="w-8 h-8 rounded-full bg-emerald-600 dark:bg-emerald-500 flex items-center justify-center text-white text-sm font-black shadow-sm uppercase tracking-wider cursor-help transition-transform hover:scale-105"
-          >
-            {nomEntreprise ? nomEntreprise.charAt(0).toUpperCase(): ""}
-          </div>
-        </div>
+              {/* AVATAR DYNAMIQUE : Affiche l'initiale de l'entreprise */}
+              <div 
+                title={nomEntreprise} // Affiche le nom complet au survol de la souris
+                className="w-8 h-8 rounded-full bg-emerald-600 dark:bg-emerald-500 flex items-center justify-center text-white text-sm font-black shadow-sm uppercase tracking-wider cursor-help transition-transform hover:scale-105"
+              >
+                {nomEntreprise ? nomEntreprise.charAt(0).toUpperCase() : ""}
+              </div>
+            </div>
+          </header>
 
-        </header>
 
         <main className="flex-1 p-8 overflow-y-auto">
           {children}

@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
-
+import { db as baseDb } from "../../../lib/db";
+const db = baseDb as any;
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -18,10 +19,10 @@ export default function AjoutArticleStockPage() {
   const [formData, setFormData] = useState({
     nom_produit: "",
     prix_achat: "",
-    prix_vente: "", // Prix général ou détail
-    stock_actuel: "",
+    prix_vente: "", 
+    stock_actuel: "", // Utilisé comme valeur de départ
     stock_alerte: "5",
-    unite_mesure: "Sac" // Sac, Kg, Carton, Unité
+    unite_mesure: "Sac" 
   });
 
   useEffect(() => {
@@ -36,37 +37,64 @@ export default function AjoutArticleStockPage() {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  const handleAjouterArticle = async (e: React.FormEvent) => {
+    const handleAjouterArticle = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!userId) return;
     setSaving(true);
     setStatus(null);
 
-    try {
-      const { error } = await supabase.from("gf_produits").insert([
-        {
-          utilisateur_id: userId,
-          nom: formData.nom_produit,
-          prix_achat: Number(formData.prix_achat) || 0,
-          prix_vente: Number(formData.prix_vente) || 0,
-          stock_actuel: Number(formData.stock_actuel) || 0,
-          stock_alerte: Number(formData.stock_alerte) || 0,
-          unite_mesure: formData.unite_mesure,
-        }
-      ]);
+    const quantiteSaisie = Number(formData.stock_actuel) || 0;
+    const nouvelId = crypto.randomUUID(); 
 
-      if (error) throw error;
+    try {
+      // 1️⃣ ÉCRITURE SÉCURISÉE DANS LA BASE LOCALE DEXIE (Utilise directement 'db' déjà typé)
+      await db["gf_produits"].add({
+        id: nouvelId,
+        utilisateur_id: userId,
+        nom: formData.nom_produit,
+        prix_achat: Number(formData.prix_achat) || 0,
+        prix_vente: Number(formData.prix_vente) || 0,
+        stock_initial: quantiteSaisie, 
+        stock_actuel: quantiteSaisie,  
+        stock_alerte: Number(formData.stock_alerte) || 0,
+        unite_mesure: formData.unite_mesure,
+        statut_synchro: "local", 
+      });
+
+      // 2️⃣ ENVOI SIMULTANÉ À SUPABASE SI EN LIGNE
+      if (navigator.onLine) {
+        const { error } = await supabase.from("gf_produits").insert([
+          {
+            id: nouvelId,
+            utilisateur_id: userId,
+            nom: formData.nom_produit,
+            prix_achat: Number(formData.prix_achat) || 0,
+            prix_vente: Number(formData.prix_vente) || 0,
+            stock_initial: quantiteSaisie,
+            stock_actuel: quantiteSaisie,
+            stock_alerte: Number(formData.stock_alerte) || 0,
+            unite_mesure: formData.unite_mesure,
+          }
+        ]);
+
+        if (!error) {
+          // Mise à jour locale en statut synchronisé
+          await db["gf_produits"].update(nouvelId, { statut_synchro: "synced" });
+        }
+      }
 
       setStatus({ type: "success", text: "Nouvel article ajouté au catalogue avec succès !" });
       setFormData({ nom_produit: "", prix_achat: "", prix_vente: "", stock_actuel: "", stock_alerte: "5", unite_mesure: "Sac" });
       setTimeout(() => router.push("/dashboard"), 1500);
 
     } catch (err: any) {
+      console.error(err);
       setStatus({ type: "error", text: err.message || "Erreur d'enregistrement." });
     } finally {
       setSaving(false);
     }
   };
+
 
   return (
     <div className="p-6 max-w-xl mx-auto bg-white rounded-xl shadow-sm border border-gray-100 mt-10">
@@ -119,9 +147,25 @@ export default function AjoutArticleStockPage() {
           <input type="number" name="stock_alerte" value={formData.stock_alerte} onChange={handleChange} required className="w-full border p-2.5 rounded-lg text-sm" placeholder="Alerte si stock inférieur ou égal à..." />
         </div>
 
-        <button type="submit" disabled={saving} className="w-full bg-emerald-600 text-white p-3 rounded-lg text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors mt-2">
-          {saving ? "Enregistrement de l'article..." : "Ajouter l'article au Stock"}
-        </button>
+        {/* 🔄 ZONE DES BOUTONS DE VALIDATION ET D'ANNULATION */}
+        <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
+          <button 
+            type="submit" 
+            disabled={saving} 
+            className="w-full bg-emerald-600 text-white p-3 rounded-lg text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors order-1 sm:order-2"
+          >
+            {saving ? "Enregistrement de l'article..." : "Ajouter l'article au Stock"}
+          </button>
+          
+          <button 
+            type="button" 
+            disabled={saving}
+            onClick={() => router.push("/dashboard")} 
+            className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 p-3 rounded-lg text-sm font-semibold transition-colors order-2 sm:order-1 disabled:opacity-50"
+          >
+            ❌ Annuler
+          </button>
+        </div>
       </form>
     </div>
   );

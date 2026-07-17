@@ -10,23 +10,35 @@ const supabase = createClient(
 );
 
 const AVAILABLE_MODULES = [
-  { id: "facture", name: "GreenFacture", description: "Ajouter des articles et emmettre des factures.", icon: "💵", setupHref: "/dashboard/parametres/stock" }, { id: "stock", name: "GreenStock", description: "Gérer votre stock.", icon: "💳", setupHref: "/dashboard/parametres/stock" },
+  { 
+    id: "facture", 
+    name: "GreenFacture", 
+    description: "Émettre vos factures clients et suivre vos ventes.", 
+    icon: "💵", 
+    setupHref: "/dashboard/saisies?module=facture" 
+  }, 
+  { 
+    id: "facture_stock", // 📦 Dépend du service de facturation global
+    name: "GreenStock (Catalogue)", 
+    description: "Ajouter des articles, gérer les seuils et valoriser votre stock.", 
+    icon: "💳", 
+    setupHref: "/dashboard/parametres/stock" 
+  },
   { id: "personnel", name: "GreenPersonnel", description: "...", icon: "👥", setupHref: "/dashboard/saisies?module=personnel" },
   { id: "asset", name: "GreenAsset", description: "...", icon: "🛡️", setupHref: "/dashboard/saisies?module=asset" },
   { id: "school", name: "GreenSchool (Inscription)", description: "Inscription des élèves", icon: "🏫", setupHref: "/dashboard/saisies?module=school" },
   { 
-  id: "school_enseignant", 
-  name: "GreenSchool (Enseignants)", 
-  description: "Enregistrement et gestion du corps enseignant.", 
-  icon: "👨‍🏫", 
-  setupHref: "/dashboard/saisies?module=school_enseignant" 
-},
+    id: "school_enseignant", 
+    name: "GreenSchool (Enseignants)", 
+    description: "Enregistrement et gestion du corps enseignant.", 
+    icon: "👨‍🏫", 
+    setupHref: "/dashboard/saisies?module=school_enseignant" 
+  },
   { id: "clinic", name: "GreenClinic", description: "...", icon: "🩺", setupHref: "/dashboard/saisies?module=clinic" },
   { id: "pointage", name: "GreenPointage", description: "...", icon: "⏱️", setupHref: "/dashboard/saisies?module=pointage" },
   { id: "data", name: "GreenData", description: "...", icon: "📈", setupHref: "/dashboard/saisies?module=data" },
   { id: "archive", name: "GreenArchive", description: "...", icon: "📁", setupHref: "/dashboard/saisies?module=archive" },
 ];
-
 
 export default function ParametresPage() {
   const router = useRouter();
@@ -111,9 +123,15 @@ export default function ParametresPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {AVAILABLE_MODULES.map((module) => {
-            const isChecked = module.id === "school_enseignant" 
-              ? activeServices.includes("school") 
-              : activeServices.includes(module.id);
+            // ✅ Gestion dynamique unifiée : stock est actif si facture est actif, de même pour enseignant avec school
+            let isChecked = false;
+            if (module.id === "school_enseignant") {
+              isChecked = activeServices.includes("school");
+            } else if (module.id === "facture_stock") {
+              isChecked = activeServices.includes("facture") || activeServices.includes("stock");
+            } else {
+              isChecked = activeServices.includes(module.id);
+            }
 
             return (
               <div
@@ -126,13 +144,13 @@ export default function ParametresPage() {
               >
                 <label className="flex items-start gap-3 cursor-pointer select-none">
                   <input
-                      type="checkbox"
-                      checked={isChecked}
-                      disabled
-                      readOnly
-                      className="mt-1 rounded text-emerald-600 h-4 w-4 border-slate-300 cursor-not-allowed opacity-70"
-                    />
-                    <div>
+                    type="checkbox"
+                    checked={isChecked}
+                    disabled
+                    readOnly
+                    className="mt-1 rounded text-emerald-600 h-4 w-4 border-slate-300 cursor-not-allowed opacity-70"
+                  />
+                  <div>
                     <div className="flex items-center gap-2 font-bold text-sm text-slate-900 dark:text-white">
                       <span>{module.icon}</span>
                       <span>{module.name}</span>
@@ -143,7 +161,7 @@ export default function ParametresPage() {
                   </div>
                 </label>
 
-                {/* BOUTON D'ACTION DE CRÉATION ET D'INSERTION : Visible uniquement si coché */}
+                {/* BOUTON D'ACTION DE CRÉATION ET D'INSERTION */}
                 {isChecked && (
                   <div className="pt-3 border-t border-slate-200/60 dark:border-slate-800 flex justify-between items-center animate-fadeIn">
                     <span className="text-[11px] bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 font-bold px-2 py-0.5 rounded">
