@@ -4,6 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
+import ModalJuridique from "../../components/ModalJuridique"; 
+
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -181,6 +183,46 @@ export default function InscriptionPage() {
       setLoading(false);
     }
   };
+// Dans votre composant de formulaire principal :
+const [modalConfig, setModalConfig] = useState<{ isOpen: boolean; title: string; content: React.ReactNode }>({
+  isOpen: false,
+  title: "",
+  content: null
+});
+
+const ouvrirModal = (type: "cgu" | "privacy") => {
+  if (type === "cgu") {
+    setModalConfig({
+      isOpen: true,
+      title: "Conditions Générales d'Utilisation",
+      content: (
+        <>
+          <p className="font-bold text-slate-800 dark:text-slate-100">1. Objet de la plateforme</p>
+          <p>La Suite logicielle GreenItCar Business Suite fournit des outils de gestion administrative et financière pour les entreprises et établissements.</p>
+          <p className="font-bold text-slate-800 dark:text-slate-100">2. Responsabilité de l'utilisateur</p>
+          <p>Vous êtes responsable de l'exactitude des informations saisies (factures, données scolaires). L'éditeur ne peut être tenu responsable d'éventuelles erreurs comptables.</p>
+          <p className="font-bold text-slate-800 dark:text-slate-100">3. Disponibilité du service</p>
+          <p>Nous nous efforçons de maintenir un accès stable 24h/24 mais des opérations de maintenance peuvent suspendre temporairement l'application.</p>
+        </>
+      )
+    });
+  } else {
+    setModalConfig({
+      isOpen: true,
+      title: "Politique de Confidentialité",
+      content: (
+        <>
+          <p className="font-bold text-slate-800 dark:text-slate-100">1. Données collectées</p>
+          <p>Nous collectons votre adresse e-mail, les identifiants système issus de Supabase et l'historique des actions nécessaires au bon fonctionnement de votre espace.</p>
+          <p className="font-bold text-slate-800 dark:text-slate-100">2. Hébergement et Sécurité</p>
+          <p>Toutes vos données applicatives sont stockées de manière sécurisée par notre fournisseur d'infrastructure Supabase. L'accès à votre compte basé sur votre adresse e-mail est protégé par un protocole SSL.</p>
+          <p className="font-bold text-slate-800 dark:text-slate-100">3. Vos Droits</p>
+          <p>Conformément aux réglementations sur la protection des données, vous disposez d'un droit d'accès, de modification et de suppression définitive de votre compte et de ses données associées.</p>
+        </>
+      )
+    });
+  }
+};
 
 
   // --- ÉTAPE 2b : Renvoyer le code OTP ---
@@ -565,38 +607,50 @@ export default function InscriptionPage() {
             </div>
 
             {/* Conditions */}
-            <div className="flex items-start gap-3">
-              <input
-                type="checkbox"
-                name="terme"
-                id="terms"
-                checked={formData.terme}
-                onChange={handleChange}
-                className="w-5 h-5 rounded border border-slate-400 dark:border-slate-600 bg-slate-200 dark:bg-slate-800 text-emerald-500 focus:ring-2 focus:ring-emerald-500 cursor-pointer mt-1"
-              />
-              <label htmlFor="terms" className="text-slate-700 dark:text-slate-300 text-sm">
-                J'accepte les{" "}
-                <Link
-                  href="#"
-                  className="text-emerald-500 dark:text-emerald-400 hover:text-emerald-600 dark:hover:text-emerald-300 font-semibold"
-                >
-                  conditions d'utilisation
-                </Link>{" "}
-                et la{" "}
-                <Link
-                  href="#"
-                  className="text-emerald-500 dark:text-emerald-400 hover:text-emerald-600 dark:hover:text-emerald-300 font-semibold"
-                >
-                  politique de confidentialité
-                </Link>
-                *
-              </label>
-            </div>
-            {errors.terme && (
-              <p className="text-red-600 dark:text-red-400 text-sm">
-                {errors.terme}
-              </p>
-            )}
+<div className="flex items-start gap-3">
+  <input
+    type="checkbox"
+    name="terme"
+    id="terms"
+    checked={formData.terme}
+    onChange={handleChange}
+    className="w-5 h-5 rounded border border-slate-400 dark:border-slate-600 bg-slate-200 dark:bg-slate-800 text-emerald-500 focus:ring-2 focus:ring-emerald-500 cursor-pointer mt-1"
+  />
+  <label htmlFor="terms" className="text-slate-700 dark:text-slate-300 text-sm">
+    J'accepte les{" "}
+    <button
+      type="button" // Important pour ne pas soumettre le formulaire par erreur
+      onClick={() => ouvrirModal("cgu")}
+      className="text-emerald-500 dark:text-emerald-400 hover:text-emerald-600 dark:hover:text-emerald-300 font-semibold underline underline-offset-2"
+    >
+      conditions d'utilisation
+    </button>{" "}
+    et la{" "}
+    <button
+      type="button"
+      onClick={() => ouvrirModal("privacy")}
+      className="text-emerald-500 dark:text-emerald-400 hover:text-emerald-600 dark:hover:text-emerald-300 font-semibold underline underline-offset-2"
+    >
+      politique de confidentialité
+    </button>
+    *
+  </label>
+</div>
+
+{errors.terme && (
+  <p className="text-red-600 dark:text-red-400 text-sm mt-1">
+    {errors.terme}
+  </p>
+)}
+
+{/* Injecter le composant Modale tout en bas de votre JSX parent */}
+<ModalJuridique 
+  isOpen={modalConfig.isOpen} 
+  title={modalConfig.title} 
+  content={modalConfig.content} 
+  onClose={() => setModalConfig(prev => ({ ...prev, isOpen: false }))} 
+/>
+
 
             {/* Submit Button */}
             <button

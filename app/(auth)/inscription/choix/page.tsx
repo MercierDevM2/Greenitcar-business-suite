@@ -32,35 +32,48 @@ function ChoixServicesContent() {
   ];
 
   const toggleService = (id: string) => {
-    setServicesSelectionnes((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
-    );
-  };
+  setServicesSelectionnes((prev) =>
+    prev.includes(id) ? [] : [id] // Décoche si déjà sélectionné, sinon remplace l'ancienne valeur par la nouvelle
+  );
+};
+
 
   const handleSaveServices = async () => {
-    if (servicesSelectionnes.length === 0) {
-      setError("Veuillez sélectionner au moins un service pour continuer.");
-      return;
-    }
-    setLoading(true);
-    setError("");
+  // RÈGLE STRICTE : Exactement 1 service requis
+  if (servicesSelectionnes.length !== 1) {
+    setError("Veuillez sélectionner un seul service pour continuer.");
+    return;
+  }
+  
+  setLoading(true);
+  setError("");
 
-    try {
-      const { error: updateError } = await supabase
-        .from("utilisateurs")
-        .update({ services_choisis: servicesSelectionnes })
-        .eq("id", userId);
+  try {
+    const { error: updateError } = await supabase
+      .from("utilisateurs")
+      .update({ services_choisis: servicesSelectionnes }) // Envoie ex: ["school"] ou ["facture"]
+      .eq("id", userId);
 
-      if (updateError) throw updateError;
+    if (updateError) throw updateError;
 
-      if (servicesSelectionnes.includes("school")) {
-        const currentYear = new Date().getFullYear();
-        const libelle = `${currentYear}-${currentYear + 1}`;
-        const date_debut = `${currentYear}-09-01`;
-        const date_fin = `${currentYear + 1}-07-31`;
+    // RÈGLE : L'unique service choisi est "school"
+    if (servicesSelectionnes[0] === "school") {
+      const currentYear = new Date().getFullYear();
+      const libelle = `${currentYear}-${currentYear + 1}`;
+      const date_debut = `${currentYear}-09-01`;
+      const date_fin = `${currentYear + 1}-07-31`;
 
-        // Création de l'année scolaire
-        const { data: annee, error: anneeError } = await supabase
+      const { data: existingAnnee } = await supabase
+        .from("gs_annees_scolaires")
+        .select("id")
+        .eq("utilisateur_id", userId)
+        .eq("libelle", libelle)
+        .maybeSingle();
+
+      let anneeId = existingAnnee?.id;
+
+      if (!anneeId) {
+        const { data: newAnnee, error: anneeError } = await supabase
           .from("gs_annees_scolaires")
           .insert({
             utilisateur_id: userId,
@@ -73,25 +86,30 @@ function ChoixServicesContent() {
           .single();
 
         if (anneeError) throw anneeError;
+        anneeId = newAnnee.id;
+      }
 
+      const { data: existingClasses } = await supabase
+        .from("gs_classes")
+        .select("id")
+        .eq("annee_id", anneeId)
+        .limit(1);
+
+      if (!existingClasses || existingClasses.length === 0) {
         const classes = [
-          // Maternelle
           { nom: "Petite Section", niveau: "Maternelle" },
           { nom: "Moyenne Section", niveau: "Maternelle" },
           { nom: "Grande Section", niveau: "Maternelle" },
-          // Primaire
           { nom: "CP1", niveau: "Primaire" },
           { nom: "CP2", niveau: "Primaire" },
           { nom: "CE1", niveau: "Primaire" },
           { nom: "CE2", niveau: "Primaire" },
           { nom: "CM1", niveau: "Primaire" },
           { nom: "CM2", niveau: "Primaire" },
-          // Collège
           { nom: "6ème", niveau: "Collège" },
           { nom: "5ème", niveau: "Collège" },
           { nom: "4ème", niveau: "Collège" },
           { nom: "3ème", niveau: "Collège" },
-          // Lycée
           { nom: "2nde", niveau: "Lycée" },
           { nom: "1ère", niveau: "Lycée" },
           { nom: "Terminale", niveau: "Lycée" },
@@ -102,7 +120,7 @@ function ChoixServicesContent() {
           .insert(
             classes.map((classe) => ({
               utilisateur_id: userId,
-              annee_id: annee.id,
+              annee_id: anneeId,
               nom: classe.nom,
               niveau: classe.niveau,
             }))
@@ -110,15 +128,17 @@ function ChoixServicesContent() {
 
         if (classesError) throw classesError;
       }
-
-      // Succès : On redirige vers l'écran de succès de l'inscription
-      router.push("/inscription/succes");
-    } catch (err: any) {
-      setError("Erreur lors de l'enregistrement de vos applications.");
-    } finally {
-      setLoading(false);
     }
-  };
+
+    router.push("/inscription/succes");
+  } catch (err: any) {
+    console.error("Erreur détaillée :", err);
+    setError(err.message || "Erreur lors de l'enregistrement de votre application.");
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-white via-slate-50 to-white dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 flex items-center justify-center px-4 py-8">
