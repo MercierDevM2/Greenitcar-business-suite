@@ -6,9 +6,7 @@ import { supabase } from "../../utils/supabase";
 import { useRouter } from "next/navigation";
 import ModalJuridique from "../../components/ModalJuridique"; 
 
-
-
-export default function InscriptionPage() {
+function InscriptionFormContent() {
   const router = useRouter();
   const [formData, setFormData] = useState({
     nom_entreprise: "",
@@ -709,5 +707,21 @@ const ouvrirModal = (type: "cgu" | "privacy") => {
         </div>
       </div>
     </main>
+  );
+}
+// 2. 🌟 AJOUTEZ CE BLOC COMPLET TOUT EN BAS DE VOTRE FICHIER :
+import { Suspense } from "react";
+
+export default function InscriptionPage() {
+  return (
+    <Suspense 
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-sm text-slate-400">
+          Chargement du formulaire d'inscription...
+        </div>
+      }
+    >
+      <InscriptionFormContent />
+    </Suspense>
   );
 }

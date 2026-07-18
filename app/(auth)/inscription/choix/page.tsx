@@ -10,7 +10,8 @@ interface ClassePreconfiguration {
   niveau: string;
 }
 
-export function ChoixServicesContent() {
+function ChoixServicesContent() {
+
   const router = useRouter();
   const searchParams = useSearchParams();
   const userId = searchParams.get("userId");
