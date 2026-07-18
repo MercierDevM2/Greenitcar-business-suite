@@ -1,10 +1,35 @@
-"use client";
+"use client"; 
 
+import { useRouter } from "next/navigation"; 
 import Link from "next/link";
 
 export default function SecteursPage() {
+   const router = useRouter();
   return (
     <main className="min-h-screen bg-slate-50 dark:bg-slate-950 py-16 px-4 sm:px-6 lg:px-8">
+      
+        {/* 🔙 Bouton de retour stylisé */}
+        <div className="mb-8 text-left">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:border-emerald-500/30 dark:hover:border-emerald-500/30 hover:shadow-sm transition-all group"
+          >
+            {/* Flèche avec micro-animation au survol */}
+            <svg 
+              xmlns="http://w3.org" 
+              fill="none" 
+              viewBox="0 0 24 24" 
+              strokeWidth={2.5} 
+              stroke="currentColor" 
+              className="w-3.5 h-3.5 transform group-hover:-translate-x-0.5 transition-transform"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+            </svg>
+            Retour
+          </button>
+        </div>
+
       <div className="max-w-4xl mx-auto">
         
         {/* En-tête */}

@@ -1,10 +1,13 @@
-"use client";
+"use client"; 
+
+import { useRouter } from "next/navigation"; 
 
 import { useState } from "react";
 import Link from "next/link";
 import { supabase } from "../../utils/supabase";
 
 export default function ConnexionPage() {
+   const router = useRouter();
   const [email, setEmail] = useState("");
   const [otpCode, setOtpCode] = useState("");
   const [step, setStep] = useState<"email" | "otp">("email");
@@ -110,7 +113,30 @@ export default function ConnexionPage() {
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-white via-slate-50 to-white dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 flex items-center justify-center px-4 py-8">
+
       <div className="w-full max-w-md">
+        {/* 🔙 Bouton de retour stylisé */}
+        <div className="mb-8 text-left">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:border-emerald-500/30 dark:hover:border-emerald-500/30 hover:shadow-sm transition-all group"
+          >
+            {/* Flèche avec micro-animation au survol */}
+            <svg 
+              xmlns="http://w3.org" 
+              fill="none" 
+              viewBox="0 0 24 24" 
+              strokeWidth={2.5} 
+              stroke="currentColor" 
+              className="w-3.5 h-3.5 transform group-hover:-translate-x-0.5 transition-transform"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+            </svg>
+            Retour
+          </button>
+        </div>
+
         {/* En-tête */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">
