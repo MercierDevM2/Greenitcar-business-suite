@@ -2,14 +2,13 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "../../utils/supabase";
 import { db as baseDb } from "../../lib/db";
+import { executionSynchronisationGlobale } from "../../lib/syncService"; 
+import { Special_Elite } from "next/font/google";
 
 const db = baseDb as any;
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+
 
 
 function SaisieFormContent() {
@@ -190,9 +189,11 @@ const target = e.target as HTMLFormElement;
 const currentForm = new FormData(target);
 
     
-    const getVal = (name: string, fallback: string = "") => {
-      return formData[name] || currentForm.get(name) || fallback;
-    };
+   const getFormVal = (name: string, fallback: string = "") => {
+    const value = currentForm.get(name);
+    return value ? String(value).trim() : fallback;
+  };
+
 
     let tableName = "";
     const idNumeriqueUnique = () => Number(`${Date.now()}${Math.floor(Math.random() * 100)}`);
@@ -205,13 +206,14 @@ const currentForm = new FormData(target);
 
     try {
             switch (currentModule) {
+
                case "facture": {
           tableName = "gf_factures"; 
           
           const factureId = crypto.randomUUID();
-          const totalHtCalculé = Number(getVal("total_ht")) || 0;
-          const quantiteVendue = Number(getVal("quantite")) || 1;
-          const prodId = getVal("produit_id");
+          const totalHtCalculé = Number(getFormVal("total_ht")) || 0;
+          const quantiteVendue = Number(getFormVal("quantite")) || 1;
+          const prodId = getFormVal("produit_id");
 
           // Calcul de la marge brute automatique
           const produitConcerne = articlesCatalogue.find((p: any) => String(p.id) === String(prodId));
@@ -222,11 +224,11 @@ const currentForm = new FormData(target);
           const finalFactureData = {
             id: factureId,
             utilisateur_id: userId,
-            client_nom: getVal("client_nom", "Client Comptant"),
+            client_nom: getFormVal("client_nom", "Client Comptant"),
             total_ttc: totalHtCalculé,
             total_ht: totalHtCalculé,
             benefice_realise: beneficeRealise,
-            statut: getVal("statut", "payee"),
+            statut: getFormVal("statut", "payee"),
             cree_le: new Date().toISOString(),
             statut_synchro: "local"
           };
@@ -238,7 +240,7 @@ const currentForm = new FormData(target);
             facture_id: factureId,
             produit_id: prodId,
             quantite: quantiteVendue,
-            prix_unitaire: Number(getVal("prix_unitaire")) || 0,
+            prix_unitaire: Number(getFormVal("prix_unitaire")) || 0,
             statut_synchro: "local"
           };
 
@@ -305,18 +307,18 @@ const currentForm = new FormData(target);
 
         case "stock": {
           tableName = "gf_produits";
-          const quantiteInitiale = Number(getVal("stock_actuel")) || 0;
+          const quantiteInitiale = Number(getFormVal("stock_actuel")) || 0;
           
           const finalStockData = {
             id: crypto.randomUUID(), // 🔥 Remplacement du nombre par un UUID String
             utilisateur_id: userId,
-            nom: getVal("nom_produit") || getVal("nom"),
-            prix_achat: Number(getVal("prix_achat")) || 0,
-            prix_vente: Number(getVal("prix_vente")) || 0,
+            nom: getFormVal("nom_produit") || getFormVal("nom"),
+            prix_achat: Number(getFormVal("prix_achat")) || 0,
+            prix_vente: Number(getFormVal("prix_vente")) || 0,
             stock_initial: quantiteInitiale, 
             stock_actuel: quantiteInitiale,
-            stock_alerte: Number(getVal("stock_alerte")) || 5,
-            unite_mesure: getVal("unite_mesure", "Sac"),
+            stock_alerte: Number(getFormVal("stock_alerte")) || 5,
+            unite_mesure: getFormVal("unite_mesure", "Sac"),
             statut_synchro: "local"
           };
 
@@ -335,13 +337,13 @@ const currentForm = new FormData(target);
           const nouvelEleve = {
             id: eleveIdNum,
             utilisateur_id: userId,
-            nom: (getVal("nom_eleve") || getVal("nom"))?.toUpperCase(),
-            prenom: getVal("prenom_eleve") || getVal("prenom"),
-            sexe: getVal("sexe", "M"),
-            date_naissance: getVal("date_naissance") || null,
-            nom_parent: getVal("nom_parent"),
-            telephone_parent: getVal("telephone_parent"),
-            adresse: getVal("adresse"),
+            nom: (getFormVal("nom_eleve") || getFormVal("nom"))?.toUpperCase(),
+            prenom: getFormVal("prenom_eleve") || getFormVal("prenom"),
+            sexe: getFormVal("sexe", "M"),
+            date_naissance: getFormVal("date_naissance") || null,
+            nom_parent: getFormVal("nom_parent"),
+            telephone_parent: getFormVal("telephone_parent"),
+            adresse: getFormVal("adresse"),
             statut_synchro: "local"
           };
           await db.gs_eleves.put(nouvelEleve);
@@ -349,17 +351,17 @@ const currentForm = new FormData(target);
           const nouvelleInscription = {
             id: inscriptionIdNum,
             utilisateur_id: userId,
-            annee_id: Number(getVal("annee_id")),
+            annee_id: Number(getFormVal("annee_id")),
             eleve_id: eleveIdNum,
-            classe_id: Number(getVal("classe_id")),
-            numero_matricule: getVal("numero_matricule") || null,
-            scolarite_totale: Number(getVal("scolarite_totale")) || 0,
-            reduction: Number(getVal("reduction")) || 0,
+            classe_id: Number(getFormVal("classe_id")),
+            numero_matricule: getFormVal("numero_matricule") || null,
+            scolarite_totale: Number(getFormVal("scolarite_totale")) || 0,
+            reduction: Number(getFormVal("reduction")) || 0,
             statut_synchro: "local"
           };
           await db.gs_inscriptions.put(nouvelleInscription);
 
-          const montantAcompte = Number(getVal("acompte")) || 0;
+          const montantAcompte = Number(getFormVal("acompte")) || 0;
           if (montantAcompte > 0) {
             const nouveauPaiementAcompte = {
               id: idNumeriqueUnique(),
@@ -373,17 +375,100 @@ const currentForm = new FormData(target);
           }
           break;
         }
+
+         case "school_paiement": {
+        const montantVerse = Number(getFormVal("montant")) || Number(getFormVal("montant_paiement")) || 0;
+        const inscriptionIdChoisie = Number(getFormVal("inscription_id"));
+
+        if (montantVerse <= 0 || !inscriptionIdChoisie) {
+          throw new Error("Le montant du paiement ou l'élève sélectionné est invalide.");
+        }
+
+        const nouveauPaiementSeul = {
+          id: idNumeriqueUnique(),
+          utilisateur_id: userId,
+          inscription_id: inscriptionIdChoisie,
+          montant: montantVerse,
+          date_paiement: getFormVal("date_paiement") || new Date().toISOString().split("T")[0],
+          mode_paiement: getFormVal("mode_paiement", "Espèces"),
+          statut_synchro: "local" // Stockage en cache d'abord
+        };
+
+        // Sauvegarde immédiate dans la table Dexie locale
+        await db.gs_paiements.put(nouveauPaiementSeul);
+        break;
       }
 
-      setStatus({ type: "success", text: "Enregistrement local effectué avec succès !" });
-      // Logique optionnelle de push vers Supabase en arrière-plan ici...
-    } catch (err: any) {
-      console.error(err);
-      setStatus({ type: "error", text: "Erreur lors de l'enregistrement local." });
-    } finally {
-      setSaving(false);
-    }
+      case "school_enseignant": {
+  const nomRaw = getFormVal("nom_enseignant") || getFormVal("nom");
+  const prenomRaw = getFormVal("prenom_enseignant") || getFormVal("prenom");
+  const telephoneRaw = getFormVal("telephone_enseignant");
+  const adresseRaw = getFormVal("adresse_enseignant");
+
+  if (!nomRaw || !prenomRaw || !telephoneRaw || !adresseRaw) {
+    setStatus({ type: "error", text: "⚠️ Veuillez remplir tous les champs obligatoires (*)." });
+    setSaving(false);
+    return;
+  }
+
+  
+  const specialiteFinale = formData.specialite
+    ? String(formData.specialite).trim() 
+    : null;
+
+  const nouvelEnseignant = {
+    id: idNumeriqueUnique(),
+    utilisateur_id: userId,
+    nom: nomRaw.toUpperCase(),
+    prenom: prenomRaw,
+    adresse: adresseRaw, 
+    telephone: telephoneRaw, 
+    email: getFormVal("email_enseignant") || null,
+    specialite: specialiteFinale, 
+    statut_synchro: "local"
   };
+
+  // Enregistrement local Dexie
+  await db.gs_enseignants.put(nouvelEnseignant);
+  break;
+}
+
+
+
+      default:
+        console.warn("Aucun module correspondant trouvé pour la soumission.");
+        break;
+    }
+
+    setStatus({ type: "success", text: "Enregistrement local effectué avec succès !" });
+    
+    // Réinitialisation du formulaire
+    target.reset();
+    // 🧼 Nettoyage de l'état en contournant le blocage de type TypeScript
+setFormData((prev: any) => ({ 
+  ...prev, 
+  specialite: "" 
+}));
+
+
+    // ==========================================
+    // 🚀 FIX 2 : SYNCHRONISATION INSTANTANÉE VERS SUPABASE (SI ONLINE)
+    // ==========================================
+    if (typeof window !== "undefined" && navigator.onLine) {
+      console.log("🌐 Internet actif : Envoi immédiat des paiements et inscriptions vers Supabase...");
+      
+      // Appel de votre orchestrateur unifié que nous avons stabilisé ensemble
+      const currentAnneeId = getFormVal("annee_id") || "1";
+      await executionSynchronisationGlobale(userId, currentAnneeId);
+    }
+
+  } catch (err: any) {
+    console.error("Erreur de soumission :", err);
+    setStatus({ type: "error", text: err.message || "Erreur lors de l'enregistrement." });
+  } finally {
+    setSaving(false);
+  }
+};
 
 
 useEffect(() => {
@@ -871,7 +956,7 @@ return (
       )}
 
 
-      {/* FORMULAIRE GREEN_SCHOOL : ENSEIGNANTS */}
+              {/* FORMULAIRE GREEN_SCHOOL : ENSEIGNANTS */}
         {currentModule === "school_enseignant" && (
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -886,7 +971,7 @@ return (
                   value={formData.nom_enseignant || ""}
                   onChange={handleInputChange}
                   placeholder="ex: NOM"
-                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 dark:text-white"
                 />
               </div>
 
@@ -901,63 +986,180 @@ return (
                   value={formData.prenom_enseignant || ""}
                   onChange={handleInputChange}
                   placeholder="ex: Prénom"
-                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 dark:text-white"
                 />
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                Numéro de Téléphone *
-              </label>
-              <input
-                type="tel"
-                name="telephone_enseignant"
-                required
-                value={formData.telephone_enseignant || ""}
-                onChange={handleInputChange}
-                placeholder="ex: +236..."
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                  Adresse *
+                </label>
+                <input type="text"
+                  name="adresse_enseignant"
+                  required
+                  value={formData.adresse_enseignant || ""}
+                  onChange={handleInputChange}
+                  placeholder="Quartier"
+                 className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 dark:text-white"
+                />
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                Adresse Email
-              </label>
-              <input
-                type="email"
-                name="email_enseignant"
-                value={formData.email_enseignant || ""}
-                onChange={handleInputChange}
-                placeholder="ex: enseignant@ecole.com"
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                  Numéro de Téléphone *
+                </label>
+                <input
+                  type="tel"
+                  name="telephone_enseignant"
+                  required
+                  value={formData.telephone_enseignant || ""}
+                  onChange={handleInputChange}
+                  placeholder="ex: +236..."
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                  Adresse Email
+                </label>
+                <input
+                  type="email"
+                  name="email_enseignant"
+                  value={formData.email_enseignant || ""}
+                  onChange={handleInputChange}
+                  placeholder="ex: enseignant@ecole.com"
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 dark:text-white"
+                />
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                Spécialité / Matière enseignée
+                          {/* 🚨 LE SYSTÈME DE SPÉCIALITÉS CORRIGÉ AVEC INPUT CACHÉ */}
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                Spécialités / Matières enseignées
               </label>
+
+             {/* 🔒 CHAMP CACHÉ : Transmet la valeur finale à New FormData lors du Submit */}
+            <input 
+              type="hidden" 
+              name="specialite" 
+              value={formData.specialite || ""} 
+            />
+
+            {/* Barre de saisie et de recherche intelligente */}
+            <div className="flex gap-2 bg-white dark:bg-slate-900 p-2 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
               <select
-                name="specialite_enseignant"
-                value={formData.specialite_enseignant || ""}
-                onChange={handleInputChange}
-                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                name="select_predefined_specialite"
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (!value) return;
+                  
+                  const currentSpecs = formData.specialite
+                    ? formData.specialite.split(", ").map((s: string) => s.trim()) 
+                    : [];
+                  
+                  if (!currentSpecs.includes(value)) {
+                    const updated = [...currentSpecs, value].join(", ");
+                    setFormData({ ...formData, specialite: updated });
+                  }
+                  e.target.value = ""; // Réinitialise le select
+                }}
+                className="flex-1 text-sm bg-transparent border-none text-slate-700 dark:text-slate-300 focus:outline-none cursor-pointer"
               >
-                <option value="">Sélectionnez une spécialité</option>
-                <option value="Maternelle (Maternelle)">Généraliste (Maternelle)</option>
-                <option value="Généraliste (Primaire)">Généraliste (Primaire)</option>
-                <option value="Mathématiques">Mathématiques</option>
-                <option value="Français / Lettres">Français / Lettres</option>
-                <option value="Histoire-Géographie">Histoire-Géographie</option>
-                <option value="Sciences (SVT/Physique)">Sciences (SVT / Physique)</option>
-                <option value="Anglais">Anglais</option>
-                <option value="Éducation Physique (EPS)">Éducation Physique (EPS)</option>
-              </select>
+                  <option value="">Sélectionnez ou recherchez une spécialité...</option>
+                  
+                  <optgroup label="🏫 Enseignement Général Classique">
+                    <option value="Généraliste (Maternelle)">Généraliste (Maternelle)</option>
+                    <option value="Généraliste (Primaire)">Généraliste (Primaire)</option>
+                    <option value="Mathématiques">Mathématiques</option>
+                    <option value="Français / Lettres">Français / Lettres</option>
+                    <option value="Histoire-Géographie">Histoire-Géographie</option>
+                    <option value="Sciences (SVT / Physique)">Sciences (SVT / Physique)</option>
+                    <option value="Anglais">Anglais</option>
+                    <option value="Éducation Physique (EPS)">Éducation Physique (EPS)</option>
+                  </optgroup>
+
+                  <optgroup label="🎓 Enseignement Supérieur / Universitaire">
+                    <option value="Informatique / Génie Logiciel">Informatique / Génie Logiciel</option>
+                    <option value="Économie / Gestion d'Entreprise">Économie / Gestion d'Entreprise</option>
+                    <option value="Droit Public / Privé">Droit Public / Privé</option>
+                    <option value="Médecine / Sciences de la Santé">Médecine / Sciences de la Santé</option>
+                    <option value="Physique Quantique / Mécanique">Physique Quantique / Mécanique</option>
+                    <option value="Chimie Organique / Biochimie">Chimie Organique / Biochimie</option>
+                    <option value="Marketing Digital / Com">Marketing Digital / Com</option>
+                    <option value="Comptabilité & Audit">Comptabilité & Audit</option>
+                    <option value="Ressources Humaines">Ressources Humaines</option>
+                  </optgroup>
+                </select>
+
+               <input
+                type="text"
+                placeholder="Autre matière... (Entrée)"
+                id="custom_specialite_input"
+                name="custom_specialite_text" 
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault(); // Évite la soumission globale du formulaire
+                    const input = e.currentTarget;
+                    const val = input.value.trim();
+                    if (!val) return;
+
+                    const currentSpecs = formData.specialite 
+                      ? formData.specialite.split(", ").map((s: string) => s.trim()) 
+                      : [];
+
+                    if (!currentSpecs.includes(val)) {
+                      const updated = [...currentSpecs, val].join(", ");
+                      setFormData({ ...formData, specialite: updated });
+                    }
+                    input.value = ""; // Vide le champ texte après l'ajout
+                  }
+                }}
+                className="w-1/3 px-3 py-1 border-l border-slate-200 dark:border-slate-800 bg-transparent text-xs focus:outline-none text-slate-700 dark:text-slate-300"
+              />
             </div>
-          </div>
+            <span className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 italic block">
+              💡 Appuyez sur la touche <strong>Entrée</strong> pour valider l'ajout d'une autre matière.
+            </span>
+
+              
+              {/* Zone d'affichage des badges dynamiques */}
+              <div className="flex flex-wrap gap-2 pt-1">
+                {(formData.specialite ? formData.specialite.split(", ").map((s: string) => s.trim()) : [])
+                  .filter((s: string) => s.length > 0)
+                  .map((spec: string, idx: number) => (
+                    <span
+                      key={idx}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-400 border border-emerald-200/40"
+                    >
+                      {spec}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const currentSpecs = formData.specialite
+                            ? formData.specialite.split(", ").map((s: string) => s.trim())
+                            : [];
+                          const filtered = currentSpecs.filter((s: string) => s !== spec);
+                          setFormData({ ...formData, specialite: filtered.join(", ") });
+                        }}
+                        className="hover:text-red-500 font-bold transition-colors text-[11px]"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+              </div>
+            </div>
+
+            </div>
         )}
+
+
        {/* 2. Encaisser une tranche de scolarité */}
           {currentModule === "school_paiement" && (
             <>
@@ -1014,9 +1216,16 @@ return (
                             return nomComplet.includes(searchQuery.toLowerCase().trim());
                           })
                           .map((ins: any) => {
-                            const netAPayer = (Number(ins.scolarite_totale) || 0) - (Number(ins.reduction) || 0);
+                            const scolariteBrute = Number(ins.scolarite_totale) || 0;
+                            const reductionAccordee = Number(ins.reduction) || 0;
+
+                            // 🔒 Sécurité : Le net à payer ne peut pas être inférieur à 0
+                            const netAPayer = Math.max(0, scolariteBrute - reductionAccordee);
+                            
                             const totalDejaPaye = ins.gs_paiements?.reduce((sum: number, p: any) => sum + (Number(p.montant) || 0), 0) || 0;
-                            const resteAPayer = netAPayer - totalDejaPaye;
+                            
+                            // 🔒 Sécurité : Le reste à payer ne peut pas être négatif (si l'élève a trop-perçu)
+                            const resteAPayer = Math.max(0, netAPayer - totalDejaPaye);
 
                             return (
                               <li

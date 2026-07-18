@@ -1,20 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "../utils/supabase";
 import { useRouter } from "next/navigation";
 import { db as baseDb } from "../lib/db";
 // @ts-ignore
 import { executionSynchronisationGlobale } from "../lib/syncService";
-
-
+import LoaderOuvert from "../components/LoaderOuvert";
 
 const db = baseDb as any;
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
 
 interface KpiCard {
   title: string;
@@ -26,59 +20,6 @@ interface KpiCard {
 // =========================================================================
 // 🔄 LOGIQUE DE SYNCHRONISATION GLOBALE (DEXIE PENDING -> SUPABASE -> DEXIE CACHE)
 // =========================================================================
-const executionSynchronisationGlobale = async (userId: string, anneeId: string): Promise<void> => {
-  try {
-    console.log("Début de la synchronisation pour l'utilisateur :", userId);
-
-    // --- EXEMPLE DE SYNCHRO MODULE ÉCOLE : INSCRIPTIONS ---
-    // 1. Récupérer les inserts locaux en attente
-    const inscriptionsPending = await db["gs_inscriptions"]
-      .filter((item: any) => item.utilisateur_id === userId && item.statut_synchro === "pending")
-      .toArray();
-
-    if (inscriptionsPending.length > 0) {
-      // 2. Envoyer vers Supabase (en retirant le champ local 'statut_synchro' avant envoi)
-      const dataToSend = inscriptionsPending.map(({ statut_synchro, ...reste }: any) => reste);
-      const { error } = await supabase.from("gs_inscriptions").upsert(dataToSend);
-
-      if (!error) {
-        // 3. Passer le statut en "synced" localement une fois validé par Supabase
-        await db["gs_inscriptions"]
-          .where("id")
-          .anyOf(inscriptionsPending.map((i: any) => i.id))
-          .modify({ statut_synchro: "synced" });
-      } else {
-        console.error("Erreur Supabase Inscriptions :", error);
-      }
-    }
-
-    // --- EXEMPLE DE SYNCHRO MODULE COMMERCE : FACTURES ---
-    const facturesPending = await db["gf_factures"]
-      .filter((item: any) => item.utilisateur_id === userId && item.statut_synchro === "pending")
-      .toArray();
-
-    if (facturesPending.length > 0) {
-      const dataToSend = facturesPending.map(({ statut_synchro, ...reste }: any) => reste);
-      const { error } = await supabase.from("gf_factures").upsert(dataToSend);
-
-      if (!error) {
-        await db["gf_factures"]
-          .where("id")
-          .anyOf(facturesPending.map((f: any) => f.id))
-          .modify({ statut_synchro: "synced" });
-      } else {
-        console.error("Erreur Supabase Factures :", error);
-      }
-    }
-
-    // Répétez ce schéma pour vos autres tables si nécessaire (gs_paiements, gf_produits...)
-
-    console.log("✅ Synchronisation globale terminée avec succès !");
-  } catch (error) {
-    console.error("Erreur critique lors de la synchronisation :", error);
-    throw error;
-  }
-};
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -98,6 +39,7 @@ export default function DashboardPage() {
 
   const [classes, setClasses] = useState<any[]>([]);
   const [currentClasse, setCurrentClasse] = useState("toutes");
+  const [isInitialSync, setIsInitialSync] = useState<boolean>(true);
 
   const [rawFacturation, setRawFacturation] = useState({
     factures: [] as any[],
@@ -107,8 +49,75 @@ export default function DashboardPage() {
     chiffreAffaires: 0,
     margeTotale: 0,
   });
+  
+
+  useEffect(() => {
+  const initDashboard = async (): Promise<void> => {
+    try {
+      // 1. 🚨 RÉCUPÉRATION DE LA VRAIE SESSION SUPABASE
+      const { data: { session }, error: authError } = await supabase.auth.getSession();
+      
+      if (authError || !session?.user) {
+        console.warn("⚠️ Aucune session active détectée, redirection...");
+        router.push("/inscription");
+        return;
+      }
+
+      // Extraction du véritable UUID de l'utilisateur
+      const uid = session.user.id; 
+
+      // 2. Récupération de l'année scolaire active associée à cet utilisateur sur Supabase
+      const { data: anneeData } = await supabase
+        .from("gs_annees_scolaires")
+        .select("id")
+        .eq("utilisateur_id", uid)
+        .eq("active", true)
+        .maybeSingle();
+
+      if (!anneeData) {
+        console.warn("⚠️ Aucune année scolaire active trouvée sur le serveur pour cet utilisateur.");
+        setIsInitialSync(false);
+        return;
+      }
+
+      const anneeId = String(anneeData.id);
+
+      // Mise à jour sécurisée des variables d'état pour le reste du composant
+      setUserId(uid);
+      setCurrentAnnee(anneeId);
+
+      // 3. 🚀 SYNCHRONISATION CRITIQUE : Lance le téléchargement des classes de ce VRAI utilisateur
+      if (typeof window !== "undefined" && navigator.onLine) {
+        await executionSynchronisationGlobale(uid, anneeId);
+      }
+
+      // 4. LECTURE DU CACHE : Remplissage immédiat de votre sélecteur de classes
+      await loadSchoolData(uid, anneeId);
+      await loadFactureData(uid);
+
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        console.error("❌ Erreur d'initialisation du Dashboard :", err.message);
+      }
+    } finally {
+      // Désactivation de l'écran de chargement
+      setIsInitialSync(false);
+    }
+  };
+
+  initDashboard();
+}, [router]); // Ne dépend plus de userId pour éviter la boucle infinie de rendus
+
+
+
 
   const loadSchoolData = async (uid: string, anneeId: string) => {
+  const parsedAnneeId = Number(anneeId);
+  if (!uid || !anneeId || isNaN(parsedAnneeId)) {
+    console.warn("⚠️ loadSchoolData annulé : uid ou anneeId invalide.", { uid, anneeId });
+    return;
+  }
+
   try {
     // 1. Récupération globale depuis Dexie
     const [
@@ -118,31 +127,35 @@ export default function DashboardPage() {
       enseignantsLocaux,
       classesLocales,
     ] = await Promise.all([
-      db["gs_inscriptions"].where("annee_id").equals(Number(anneeId)).toArray(),
+      db["gs_inscriptions"].where("annee_id").equals(parsedAnneeId).toArray(),
       db["gs_eleves"].where("utilisateur_id").equals(uid).toArray(),
       db["gs_paiements"].where("utilisateur_id").equals(uid).toArray(),
       db["gs_enseignants"].where("utilisateur_id").equals(uid).toArray(),
-      db["gs_classes"].where("annee_id").equals(Number(anneeId)).toArray(),
+      db["gs_classes"].where("utilisateur_id").equals(uid).toArray(),
     ]);
 
-    // 2. 🚨 SÉCURISATION DU CACHE DU DASHBOARD : ON FILTRE TOUT SUR LE STATUT SYNCHRONISÉ
-    // Le Dashboard ignore complètement les nouveaux inserts locaux ("local" ou "pending")
+    // 2. 🔒 VERROUILLAGE DU CACHE : Seules les classes synchronisées avec le Cloud sont conservées
     const classesCache = classesLocales.filter(
-      (c: any) => c.utilisateur_id === uid && (c.statut_synchro === "synced" || c.statut_synchro === "synchronise")
+      (c: any) => 
+        c.annee_id === parsedAnneeId && 
+        (c.statut_synchro === "synced" || c.statut_synchro === "synchronise")
     );
     
+    // Verrouillage des enseignants synchronisés
     const enseignantsCache = enseignantsLocaux.filter(
-      (e: any) => (e.statut_synchro === "synced" || e.statut_synchro === "synchronise")
+      (e: any) => e.statut_synchro === "synced" || e.statut_synchro === "synchronise"
     );
 
     const classesMap = new Map(classesCache.map((c: any) => [c.id, c]));
+    
+    // Verrouillage des élèves synchronisés
     const elevesCacheMap = new Map(
       elevesLocaux
         .filter((e: any) => e.statut_synchro === "synced" || e.statut_synchro === "synchronise")
         .map((e: any) => [e.id, e])
     );
 
-    // Filtrage des inscriptions synchronisées
+    // 3. Reconstitution des jointures (Inscriptions verrouillées sur le cache Cloud)
     const inscriptionsCache = inscriptionsLocales.map((ins: any) => {
       const cl = classesMap.get(ins.classe_id) as any;
       const el = elevesCacheMap.get(ins.eleve_id) as any;
@@ -152,50 +165,55 @@ export default function DashboardPage() {
         gs_eleves: el ? { nom: el.nom, prenom: el.prenom } : null,
       };
     }).filter(
-      (i: any) => i.utilisateur_id === uid && i.gs_eleves !== null && (i.statut_synchro === "synced" || i.statut_synchro === "synchronise")
+      (i: any) => 
+        i.utilisateur_id === uid && 
+        i.gs_eleves !== null && 
+        (i.statut_synchro === "synced" || i.statut_synchro === "synchronise")
     );
 
     const idsCache = new Set<any>((inscriptionsCache || []).map((i: any) => i.id));
     
-    // Filtrage des paiements synchronisés
+    // Verrouillage des paiements synchronisés associés
     const paiementsCache = paiementsLocaux.filter(
-      (p: any) => idsCache.has(p.inscription_id) && (p.statut_synchro === "synced" || p.statut_synchro === "synchronise")
+      (p: any) => 
+        idsCache.has(p.inscription_id) && 
+        (p.statut_synchro === "synced" || p.statut_synchro === "synchronise")
     );
 
-    // Mettre à jour l'état des classes pour les filtres du Dashboard (uniquement le cache)
+    // Mettre à jour le sélecteur HTML du Dashboard uniquement avec les classes officielles
     setClasses(classesCache);
 
-    // Injection dans l'état du Dashboard
+    // Injection dans l'état des KPIs (Figé sur la dernière connexion réussie)
     setRawEleves({
-      inscriptions: inscriptionsCache, // 🔒 Figé sur le cache
-      paiements: paiementsCache,       // 🔒 Figé sur le cache
-      enseignants: enseignantsCache.length, // 🔒 Figé sur le cache
-      classes: classesCache.length,     // 🔒 Figé sur le cache
+      inscriptions: inscriptionsCache, 
+      paiements: paiementsCache,       
+      enseignants: enseignantsCache.length, 
+      classes: classesCache.length,     
     });
 
+    console.log(`🔒 Cache School verrouillé : ${classesCache.length} classe(s) officielle(s) chargée(s).`);
+
   } catch (e) {
-    console.error("Erreur de verrouillage du cache Dashboard :", e);
+    console.error("Erreur lors de la lecture du cache School sur le Dashboard :", e);
   }
 };
 
 
+
+
 const loadFactureData = async (uid: string) => {
   try {
-    // 💡 LECTURE DU CACHE SYNCHRONISÉ UNIQUEMENT
+    // 1. Récupération globale depuis Dexie
     const [facturesLocales, produitsLocaux, itemsFacturesLocaux] = await Promise.all([
       db["gf_factures"].where("utilisateur_id").equals(uid).toArray(),
       db["gf_produits"].where("utilisateur_id").equals(uid).toArray(),
       db["gf_facture_items"] ? db["gf_facture_items"].where("utilisateur_id").equals(uid).toArray() : Promise.resolve([]),
     ]);
 
-    // 🔄 MODIFICATION : On accepte aussi le statut "local" pour que l'affichage réagisse tout de suite
-const facturesCache = facturesLocales.filter(
-  (f: any) => 
-    f.statut_synchro === "synced" || 
-    f.statut_synchro === "synchronise" || 
-    f.statut_synchro === "local" // 
-);
-
+    // 🚨 RÈGLE STRICTE HORS-LIGNE : On supprime le statut "local" / "pending" pour geler le Dashboard
+    const facturesCache = facturesLocales.filter(
+      (f: any) => f.statut_synchro === "synced" || f.statut_synchro === "synchronise"
+    );
 
     const produitsCache = produitsLocaux.filter(
       (p: any) => p.statut_synchro === "synced" || p.statut_synchro === "synchronise"
@@ -205,10 +223,9 @@ const facturesCache = facturesLocales.filter(
       (i: any) => i.statut_synchro === "synced" || i.statut_synchro === "synchronise"
     );
 
-    // 🔄 MAP DES QUANTITÉS SORTIES PAR PRODUIT
+    // 🔄 MAP DES QUANTITÉS SORTIES PAR PRODUIT (Uniquement sur données synchronisées)
     const quantitesSortiesMap = new Map<string, number>();
     itemsCache.forEach((item: any) => {
-      // On ne décompte que les items liés à des factures validées/synchronisées
       const factureAssociee = facturesCache.find((f: any) => f.id === item.facture_id);
 
       if (factureAssociee) {
@@ -217,13 +234,12 @@ const facturesCache = facturesLocales.filter(
       }
     });
 
-    // 📊 CALCULS STOCKS AVEC DÉCOMPTE AUTOMATIQUE
+    // 📊 CALCULS STOCKS AVEC DÉCOMPTE AUTOMATIQUE FIGÉ
     let alertesCount = 0;
     let totalValeurStock = 0;
 
     produitsCache.forEach((p: any) => {
       const qteSortie = quantitesSortiesMap.get(p.id) || 0;
-      // Le stock dynamique prend en compte le stock initial moins les sorties
       const stockDynamique = Math.max(0, (Number(p.stock_initial) || Number(p.stock_actuel) || 0) - qteSortie);
 
       if (stockDynamique <= (Number(p.stock_alerte) || 0)) {
@@ -232,7 +248,7 @@ const facturesCache = facturesLocales.filter(
       totalValeurStock += (Number(p.prix_achat) || 0) * stockDynamique;
     });
 
-    // 💰 CALCULS FINANCIERS SANS TVA (HT uniquement)
+    // 💰 CALCULS FINANCIERS SANS TVA HT (Uniquement sur données validées par le Cloud)
     const totalCA = facturesCache.reduce(
       (sum: number, f: any) => sum + (Number(f.total_ht) || 0),
       0
@@ -243,6 +259,7 @@ const facturesCache = facturesLocales.filter(
       0
     );
 
+    // Injection dans l'état comptable verrouillé du commerce
     setRawFacturation({
       factures: facturesCache,
       produits: produitsCache,
@@ -521,7 +538,7 @@ useEffect(() => {
     const inscriptions = rawEleves.inscriptions || [];
     const paiements = rawEleves.paiements || [];
 
-    // --- ÉTAPE 1 : Pré-calculer TOUS les paiements par inscription (Indépendant des filtres) ---
+        // --- ÉTAPE 1 : Pré-calculer TOUS les paiements par inscription (Indépendant des filtres) ---
     const paiementsParInscription: Record<number, number> = {};
     paiements.forEach((p: any) => {
       paiementsParInscription[p.inscription_id] =
@@ -544,12 +561,19 @@ useEffect(() => {
     // --- ÉTAPE 3 : Analyser la situation financière de chaque élève de cette classe ---
     inscriptionsParClasse.forEach((i: any) => {
       const paye = paiementsParInscription[i.id] || 0;
-      const totalDuEleve = Number(i.scolarite_totale || 0);
+      
+      // 🚨 DÉDUCTION DE LA RÉDUCTION : Calcul de la scolarité nette due par l'élève
+      const scolariteBrute = Number(i.scolarite_totale || 0);
+      const reductionAccordee = Number(i.reduction || 0);
+      
+      // La scolarité nette attendue ne peut pas être négative (sécurité Math.max)
+      const totalDuEleveNet = Math.max(0, scolariteBrute - reductionAccordee);
 
       totalEncaisse += paye;
-      totalAttendu += totalDuEleve;
+      totalAttendu += totalDuEleveNet; // Cumul basé sur la scolarité nette réelle
 
-      const estAjour = paye >= totalDuEleve;
+      // Un élève est à jour s'il a payé au moins sa scolarité nette
+      const estAjour = paye >= totalDuEleveNet;
 
       if (estAjour) {
         elevesAjour++;
@@ -570,14 +594,15 @@ useEffect(() => {
     // Le nombre total d'élèves affichés dépend du filtre final
     const totalInscritsAffiches = inscriptionsFinales.length;
 
-    const resteARecouvrer = totalAttendu - totalEncaisse;
+    // Reste à recouvrer calculé sur la base attendue nette
+    const resteARecouvrer = Math.max(0, totalAttendu - totalEncaisse);
 
     const tauxRecouvrement =
       totalAttendu > 0
         ? ((totalEncaisse / totalAttendu) * 100).toFixed(1)
         : "0";
 
-   // Vos variables qui fonctionnent déjà
+    // Calcul du panier moyen (scolarité moyenne par élève après réduction)
     const totalInscritsClasse = inscriptionsParClasse.length;
     const panierMoyen =
       totalInscritsClasse > 0
@@ -585,21 +610,20 @@ useEffect(() => {
         : 0;
 
     const schoolKpis = [
-          {
-            title: "Nombre élèves",
-            value: inscriptionsParClasse.length, 
-            moduleName: "GreenSchool",
-            color: "text-purple-600",
-          },
-          {
-            title: "Nombre enseignants",
-            value: rawEleves.enseignants, 
-            moduleName: "GreenSchool",
-            color: "text-blue-600",
-        },
-        {
-          title: "Nombre Classes",
-        // 🔒 Figé sur la valeur du cache synchronisé
+      {
+        title: "Nombre élèves",
+        value: inscriptionsParClasse.length, 
+        moduleName: "GreenSchool",
+        color: "text-purple-600",
+      },
+      {
+        title: "Nombre enseignants",
+        value: rawEleves.enseignants, 
+        moduleName: "GreenSchool",
+        color: "text-blue-600",
+      },
+      {
+        title: "Nombre Classes",
         value: rawEleves.classes,
         moduleName: "GreenSchool",
         color: "text-cyan-600",
@@ -623,7 +647,7 @@ useEffect(() => {
         color: "text-indigo-600",
       },
       {
-        title: "Scolarité Totale",
+        title: "Scolarité Moyenne Nett",
         value: `${panierMoyen.toLocaleString("fr-FR")} FCFA`,
         moduleName: "GreenSchool",
         color: "text-slate-600",
@@ -646,6 +670,7 @@ useEffect(() => {
   });
 // Ajout de currentSchoolFilter dans les dépendances pour recalculer si le bouton change
 }, [currentClasse, currentSchoolFilter, rawEleves, activeServices, loading]);
+
 
 
 useEffect(() => {

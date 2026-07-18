@@ -2,17 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "../../../utils/supabase";
 import { db as baseDb } from "../../../lib/db";
 // 💡 Import de l'orchestrateur de synchronisation unifié pour éviter les doublons de requêtes
 import { executionSynchronisationGlobale } from "../../../lib/syncService";
 
 const db = baseDb as any;
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
 
 export default function ListeElevesPage() {
   const router = useRouter();

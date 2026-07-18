@@ -1,13 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "../../utils/supabase";
 import { useRouter } from "next/navigation";
+import { db as baseDb } from "../../lib/db";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+const db = baseDb as any;
 
 const AVAILABLE_MODULES = [
   { 
@@ -18,7 +16,7 @@ const AVAILABLE_MODULES = [
     setupHref: "/dashboard/saisies?module=facture" 
   }, 
   { 
-    id: "facture_stock", // 📦 Dépend du service de facturation global
+    id: "facture_stock", 
     name: "GreenStock (Catalogue)", 
     description: "Ajouter des articles, gérer les seuils et valoriser votre stock.", 
     icon: "💳", 
@@ -48,49 +46,117 @@ export default function ParametresPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // ==========================================
+  // 📥 CHARGEMENT EN RÉSILIENCE RESEAU (TRY/CATCH)
+  // ==========================================
   useEffect(() => {
     async function loadSettings() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setUserId(user.id);
-        const { data } = await supabase
-          .from("utilisateurs")
-          .select("services_choisis")
-          .eq("id", user.id)
-          .single();
+      let activeUid: string | null = null;
+      let servicesCloud: string[] = [];
 
-        if (data?.services_choisis) {
-          setActiveServices(data.services_choisis);
+      // Étape A : Tentative de récupération Cloud de la session
+      try {
+        if (typeof window !== "undefined" && navigator.onLine) {
+          const { data: { user }, error: authError } = await supabase.auth.getUser();
+          if (!authError && user) {
+            activeUid = user.id;
+          }
         }
+      } catch (networkError) {
+        console.warn("⚠️ Supabase injoignable (Mode hors-ligne). Basculement local.");
+      }
+
+      // Étape B : Repli Session locale Dexie (En cas d'échec réseau)
+      if (!activeUid) {
+        try {
+          const utilisateursLocaux = await db["utilisateurs"].limit(1).toArray();
+          if (utilisateursLocaux && utilisateursLocaux.length > 0) {
+            activeUid = utilisateursLocaux[0].id;
+          }
+        } catch (dexieError) {
+          console.error("Erreur lecture session Dexie :", dexieError);
+        }
+      }
+
+      // Étape C : Chargement de la configuration des modules
+      if (activeUid) {
+        setUserId(activeUid);
+
+        try {
+          if (typeof window !== "undefined" && navigator.onLine) {
+            // Lecture Cloud
+            const { data, error: selectError } = await supabase
+              .from("utilisateurs")
+              .select("services_choisis")
+              .eq("id", activeUid)
+              .single();
+
+            if (!selectError && data?.services_choisis) {
+              servicesCloud = data.services_choisis;
+              setActiveServices(servicesCloud);
+              // Aligner Dexie en tâche de fond
+              await db["utilisateurs"].put({ id: activeUid, services_choisis: servicesCloud });
+            }
+          } else {
+            // Lecture Cache local Dexie
+            const configLocale = await db["utilisateurs"].where("id").equals(activeUid).first();
+            if (configLocale?.services_choisis) {
+              setActiveServices(configLocale.services_choisis);
+            }
+          }
+        } catch (crudError) {
+          console.error("Erreur de récupération des modules actifs :", crudError);
+        }
+      } else {
+        router.push("/inscription");
       }
       setLoading(false);
     }
     loadSettings();
-  }, []);
+  }, [router]);
 
-  const handleToggleService = (serviceId: string) => {
-    setActiveServices((prev) =>
-      prev.includes(serviceId)
-        ? prev.filter((id) => id !== serviceId)
-        : [...prev, serviceId]
-    );
-  };
-
+  // ==========================================
+  // 💾 SAUVEGARDE EN DEUX ÉTAPES (DEXIE -> CLOUD OPTIONNEL)
+  // ==========================================
   const handleSaveChanges = async () => {
     if (!userId) return;
     setSaving(true);
     setMessage(null);
 
-    const { error } = await supabase
-      .from("utilisateurs")
-      .update({ services_choisis: activeServices })
-      .eq("id", userId);
+    try {
+      // 1. Sauvegarde instantanée dans Dexie (Reste accessible même sans réseau)
+      const profilExistant = await db["utilisateurs"].where("id").equals(userId).first() || {};
+      await db["utilisateurs"].put({
+        ...profilExistant,
+        id: userId,
+        services_choisis: activeServices,
+        statut_synchro: "local"
+      });
 
-    setSaving(false);
-    if (error) {
-      setMessage({ type: "error", text: "Erreur lors de la mise à jour des paramètres." });
-    } else {
-      setMessage({ type: "success", text: "Configuration enregistrée avec succès !" });
+      // 2. Si l'utilisateur est en ligne, on pousse immédiatement sur Supabase
+      if (typeof window !== "undefined" && navigator.onLine) {
+        const { error: cloudError } = await supabase
+          .from("utilisateurs")
+          .update({ services_choisis: activeServices })
+          .eq("id", userId);
+
+        if (cloudError) throw cloudError;
+        
+        // Mettre à jour le statut en validé
+        await db["utilisateurs"].where("id").equals(userId).modify({ statut_synchro: "synced" });
+      }
+
+      setMessage({ type: "success", text: "Configuration enregistrée localement et synchronisée !" });
+    } catch (error: any) {
+      console.error("Erreur de sauvegarde :", error);
+      setMessage({ 
+        type: "error", 
+        text: navigator.onLine 
+          ? "Erreur lors de la mise à jour sur le serveur." 
+          : "Sauvegardé localement. Les modules s'activeront sur le Cloud au retour du réseau." 
+      });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -118,12 +184,11 @@ export default function ParametresPage() {
           🧩 Vos Applications Métier
         </h2>
         <p className="text-slate-500 text-xs mt-1 mb-6">
-          Cochez un module pour l'ajouter à votre espace, puis cliquez sur le bouton de configuration pour insérer vos premières données.
+          Consultez vos modules actifs. Cliquez sur Commencer les saisies pour insérer vos données scolaires ou commerciales.
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {AVAILABLE_MODULES.map((module) => {
-            // ✅ Gestion dynamique unifiée : stock est actif si facture est actif, de même pour enseignant avec school
             let isChecked = false;
             if (module.id === "school_enseignant") {
               isChecked = activeServices.includes("school");
@@ -142,7 +207,7 @@ export default function ParametresPage() {
                     : "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
                 }`}
               >
-                <label className="flex items-start gap-3 cursor-pointer select-none">
+                <div className="flex items-start gap-3 select-none">
                   <input
                     type="checkbox"
                     checked={isChecked}
@@ -159,11 +224,10 @@ export default function ParametresPage() {
                       {module.description}
                     </p>
                   </div>
-                </label>
+                </div>
 
-                {/* BOUTON D'ACTION DE CRÉATION ET D'INSERTION */}
                 {isChecked && (
-                  <div className="pt-3 border-t border-slate-200/60 dark:border-slate-800 flex justify-between items-center animate-fadeIn">
+                  <div className="pt-3 border-t border-slate-200/60 dark:border-slate-800 flex justify-between items-center">
                     <span className="text-[11px] bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 font-bold px-2 py-0.5 rounded">
                       Module actif
                     </span>

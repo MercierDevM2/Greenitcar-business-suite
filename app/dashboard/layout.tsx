@@ -1,19 +1,15 @@
 "use client";
 
 import { useEffect, useState, ReactNode } from "react";
-import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { hydraterBaseLocale } from "../lib/syncService"; 
 import { declencherSynchronisation } from "../hooks/useSync"; 
 import { db as baseDb } from "../lib/db";
+import { supabase } from "../utils/supabase";
 
 const db = baseDb as any; 
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [activeServices, setActiveServices] = useState<string[]>([]);
@@ -28,6 +24,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   const [annees, setAnnees] = useState<any[]>([]);
   const [currentAnnee, setCurrentAnnee] = useState<string>("");
+
+  
 
   // 1. GESTION DE L'ANNÉE SCOLAIRE (Hybride)
   useEffect(() => {
@@ -239,8 +237,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     {
       category: "Gestion Commerciale & Flux",
       items: [
-        { id: "facture", name: "GreenFacture", href: "/dashboard/factures", icon: "💳" },
-        { id: "stock", name: "GreenStock", href: "/dashboard/stock", icon: "📦" }
+        { id: "facture", name: "GreenFacture", href: "/dashboard/profil#taches", icon: "💳" },
+        { id: "stock", name: "GreenStock", href: "/dashboard/profil#taches", icon: "📦" }
       ]
     },
     {
@@ -260,7 +258,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     {
       category: "Applications Métiers",
       items: [
-        { id: "school", name: "GreenSchool", href: "/dashboard/school", icon: "🏫" },
+        { id: "school", name: "GreenSchool", href: "/dashboard/profil#taches", icon: "🏫" },
         { id: "clinic", name: "GreenClinic", href: "/dashboard/clinic", icon: "🩺" }
       ]
     },

@@ -2,13 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "../../../utils/supabase";
 import { db as baseDb } from "../../../lib/db";
 const db = baseDb as any;
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+
 
 export default function AjoutArticleStockPage() {
   const router = useRouter();

@@ -1,11 +1,5 @@
 import { db as baseDb } from "../lib/db";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
-
+import { supabase } from "../utils/supabase";
 const db = baseDb as any;
 
 export async function declencherSynchronisation() {

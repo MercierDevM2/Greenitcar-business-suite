@@ -103,7 +103,9 @@ const gmailLink = `mailto:${emailAddress}?subject=Demande%20d'informations%20Gre
           </div>
 
         </div>
-
+      <footer className="border-t border-slate-800 px-6 py-8 text-center text-sm text-slate-400 lg:px-8">
+        <p>© 2026 GreenItCar. Tous droits réservés.</p>
+      </footer>
       </div>
     </main>
   );

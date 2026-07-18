@@ -90,19 +90,19 @@ export default function Home() {
           </button>
 
           <nav className="hidden items-center gap-6 text-sm text-slate-300 md:flex">
-            <Link href="/solutions" className="transition hover:text-green-400">
+            <Link href="/landingpage/solutions" className="transition hover:text-green-400">
               Solutions
             </Link>
-            <Link href="/secteurs" className="transition hover:text-green-400">
+            <Link href="/landingpage/secteurs" className="transition hover:text-green-400">
               Secteurs
             </Link>
-            <Link href="/tarifs" className="transition hover:text-green-400">
+            <Link href="/landingpage/tarifs" className="transition hover:text-green-400">
               Tarifs
             </Link>
-            <Link href="/apropos" className="transition hover:text-green-400">
+            <Link href="/landingpage/apropos" className="transition hover:text-green-400">
               À propos
             </Link>
-            <Link href="/contact" className="transition hover:text-green-400">
+            <Link href="/landingpage/contact" className="transition hover:text-green-400">
               Contact
             </Link>
           </nav>
@@ -164,17 +164,17 @@ export default function Home() {
               Le partenaire de la transformation numérique des entreprises Centrafricaines.
             </h1>
             <p className="mt-6 text-lg leading-8 text-slate-300">
-              Des logiciels simples et puissants pour gérer votre boutique, votre ONG, votre école ou votre entreprise.
+              Des applications simples et puissantes pour gérer votre boutique, votre ONG, votre école ou votre entreprise.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center lg:justify-start">
               <Link
-                href="/solutions"
+                href="/landingpage/solutions"
                 className="rounded-full bg-white px-6 py-3 text-center font-semibold text-slate-900 transition hover:bg-slate-200"
               >
                 Découvrir nos solutions
               </Link>
               <Link
-                href="/demo"
+                href="/inscription"
                 className="rounded-full border border-slate-700 px-6 py-3 text-center font-semibold text-white transition hover:border-slate-500 hover:bg-slate-900"
               >
                 Demander une démonstration

@@ -2,15 +2,11 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "../../utils/supabase";
 import { useRouter } from "next/navigation";
 import ModalJuridique from "../../components/ModalJuridique"; 
 
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
 
 export default function InscriptionPage() {
   const router = useRouter();
@@ -36,25 +32,29 @@ export default function InscriptionPage() {
 
 
   const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
-  ) => {
-    const { name, value, type } = e.target;
-    const checked =
-      type === "checkbox" ? (e.target as HTMLInputElement).checked : undefined;
+  e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+) => {
+  const { name, value, type } = e.target;
 
-    setFormData((prev) => ({
-      ...prev,
-      [name]: type === "checkbox" ? checked : value,
-    }));
+  // 🚨 LE FIX : On extrait directement le booléen de manière sécurisée sans intermédiaire 'undefined'
+  const targetValue = type === "checkbox" 
+    ? (e.target as HTMLInputElement).checked 
+    : value;
 
-    if (errors[name]) {
-      setErrors((prev) => {
-        const newErrors = { ...prev };
-        delete newErrors[name];
-        return newErrors;
-      });
-    }
-  };
+  setFormData((prev) => ({
+    ...prev,
+    [name]: targetValue,
+  }));
+
+  // Nettoyage de l'erreur associée au champ modifié
+  if (errors[name]) {
+    setErrors((prev) => {
+      const newErrors = { ...prev };
+      delete newErrors[name];
+      return newErrors;
+    });
+  }
+};
 
   const validateForm = () => {
     const newErrors: Record<string, string> = {};
@@ -702,7 +702,7 @@ const ouvrirModal = (type: "cgu" | "privacy") => {
         <div className="text-center mt-8 text-slate-600 dark:text-slate-400 text-sm">
           <p>
             Besoin d'aide?{" "}
-            <Link href="/contact" className="text-emerald-500 dark:text-emerald-400 hover:text-emerald-600 dark:hover:text-emerald-300">
+            <Link href="/landingpage/contact" className="text-emerald-500 dark:text-emerald-400 hover:text-emerald-600 dark:hover:text-emerald-300">
               Contactez-nous
             </Link>
           </p>
