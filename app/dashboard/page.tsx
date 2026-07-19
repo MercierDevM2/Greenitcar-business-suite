@@ -55,7 +55,7 @@ export default function DashboardPage() {
   const initDashboard = async (): Promise<void> => {
     try {
       // 1. 🚨 RÉCUPÉRATION DE LA VRAIE SESSION SUPABASE
-      const { data: { session }, error: authError } = await supabase.auth.getSession();
+      const { data: { session }, error: authError } = await supabase.auth.getSession();//supabase.auth.getSession() vérifie la présence d'un jeton d'authentification sécurisé et chiffré stocké dans le navigateur.
       
       if (authError || !session?.user) {
         console.warn("⚠️ Aucune session active détectée, redirection...");
@@ -243,12 +243,12 @@ const loadFactureData = async (uid: string) => {
       const stockDynamique = Math.max(0, (Number(p.stock_initial) || Number(p.stock_actuel) || 0) - qteSortie);
 
       if (stockDynamique <= (Number(p.stock_alerte) || 0)) {
-        alertesCount++;
+        alertesCount++; // on incrémente le compteur d'alertes si le stock dynamique est inférieur ou égal au seuil d'alerte
       }
-      totalValeurStock += (Number(p.prix_achat) || 0) * stockDynamique;
+      totalValeurStock += (Number(p.prix_achat) || 0) * stockDynamique; // somme des prix d'achat * stock dynamique
     });
 
-    // 💰 CALCULS FINANCIERS SANS TVA HT (Uniquement sur données validées par le Cloud)
+    // 💰 CALCULS FINANCIERS 
     const totalCA = facturesCache.reduce(
       (sum: number, f: any) => sum + (Number(f.total_ht) || 0),
       0
