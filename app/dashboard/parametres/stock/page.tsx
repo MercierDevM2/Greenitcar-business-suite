@@ -6,7 +6,6 @@ import { supabase } from "../../../utils/supabase";
 import { db as baseDb } from "../../../lib/db";
 const db = baseDb as any;
 
-
 export default function AjoutArticleStockPage() {
   const router = useRouter();
   const [userId, setUserId] = useState<string | null>(null);
@@ -22,10 +21,42 @@ export default function AjoutArticleStockPage() {
     unite_mesure: "Sac" 
   });
 
+  // 🛠️ AUTHENTIFICATION HYBRIDE (Source de vérité: Supabase / Repli: Dexie)
   useEffect(() => {
     async function getAuth() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) setUserId(user.id);
+      // 1. Si hors-ligne : On récupère immédiatement l'utilisateur local depuis Dexie
+      if (!navigator.onLine) {
+        try {
+          const utilisateursLocaux = await db.utilisateurs.limit(1).toArray();
+          if (utilisateursLocaux && utilisateursLocaux.length > 0) {
+            setUserId(utilisateursLocaux[0].id);
+            console.log("Mode Hors-ligne : Utilisateur local Dexie détecté.");
+          }
+        } catch (dexieError) {
+          console.error("Impossible de lire Dexie hors-ligne :", dexieError);
+        }
+        return;
+      }
+
+      // 2. Si en ligne : On interroge Supabase
+      try {
+        const { data: { user }, error } = await supabase.auth.getUser();
+        if (!error && user) {
+          setUserId(user.id);
+          
+          // On s'assure que cet utilisateur est bien mémorisé en local pour une prochaine panne réseau
+          const usersLocaux = await db.utilisateurs.where("id").equals(user.id).toArray();
+          if (usersLocaux.length === 0) {
+            await db.utilisateurs.put({ id: user.id });
+          }
+        }
+      } catch (netError) {
+        console.log("Échec de connexion réseau Supabase, bascule sur Dexie...");
+        const utilisateursLocaux = await db.utilisateurs.limit(1).toArray();
+        if (utilisateursLocaux && utilisateursLocaux.length > 0) {
+          setUserId(utilisateursLocaux[0].id);
+        }
+      }
     }
     getAuth();
   }, []);
@@ -34,9 +65,12 @@ export default function AjoutArticleStockPage() {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-    const handleAjouterArticle = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleAjouterArticle = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!userId) return;
+    if (!userId) {
+      setStatus({ type: "error", text: "Session utilisateur introuvable. Veuillez vous reconnecter." });
+      return;
+    }
     setSaving(true);
     setStatus(null);
 
@@ -44,7 +78,7 @@ export default function AjoutArticleStockPage() {
     const nouvelId = crypto.randomUUID(); 
 
     try {
-      // 1️⃣ ÉCRITURE SÉCURISÉE DANS LA BASE LOCALE DEXIE (Utilise directement 'db' déjà typé)
+      // 1️⃣ ÉCRITURE EXPÉDITIVE DANS LA BASE LOCALE DEXIE
       await db["gf_produits"].add({
         id: nouvelId,
         utilisateur_id: userId,
@@ -58,29 +92,40 @@ export default function AjoutArticleStockPage() {
         statut_synchro: "local", 
       });
 
-      // 2️⃣ ENVOI SIMULTANÉ À SUPABASE SI EN LIGNE
+      // 2️⃣ TENTATIVE D'ENVOI À SUPABASE UNIQUEMENT SI LE RÉSEAU EST DISPONIBLE
       if (navigator.onLine) {
-        const { error } = await supabase.from("gf_produits").insert([
-          {
-            id: nouvelId,
-            utilisateur_id: userId,
-            nom: formData.nom_produit,
-            prix_achat: Number(formData.prix_achat) || 0,
-            prix_vente: Number(formData.prix_vente) || 0,
-            stock_initial: quantiteSaisie,
-            stock_actuel: quantiteSaisie,
-            stock_alerte: Number(formData.stock_alerte) || 0,
-            unite_mesure: formData.unite_mesure,
-          }
-        ]);
+        try {
+          const { error } = await supabase.from("gf_produits").insert([
+            {
+              id: nouvelId,
+              utilisateur_id: userId,
+              nom: formData.nom_produit,
+              prix_achat: Number(formData.prix_achat) || 0,
+              prix_vente: Number(formData.prix_vente) || 0,
+              stock_initial: quantiteSaisie,
+              stock_actuel: quantiteSaisie,
+              stock_alerte: Number(formData.stock_alerte) || 0,
+              unite_mesure: formData.unite_mesure,
+            }
+          ]);
 
-        if (!error) {
-          // Mise à jour locale en statut synchronisé
-          await db["gf_produits"].update(nouvelId, { statut_synchro: "synced" });
+          if (!error) {
+            // Marquage local comme correctement synchronisé avec la base cloud
+            await db["gf_produits"].update(nouvelId, { statut_synchro: "synced" });
+          }
+        } catch (supaErr) {
+          console.warn("Échec d'envoi Supabase (sauvegardé en local pour la prochaine synchro automatique) :", supaErr);
         }
       }
 
-      setStatus({ type: "success", text: "Nouvel article ajouté au catalogue avec succès !" });
+      // Notification de succès fluide (identique qu'on soit connecté ou non)
+      setStatus({ 
+        type: "success", 
+        text: navigator.onLine 
+          ? "Nouvel article enregistré et synchronisé avec succès !" 
+          : "Article enregistré localement (En attente de connexion pour synchronisation) !" 
+      });
+      
       setFormData({ nom_produit: "", prix_achat: "", prix_vente: "", stock_actuel: "", stock_alerte: "5", unite_mesure: "Sac" });
       setTimeout(() => router.push("/dashboard"), 1500);
 
@@ -92,11 +137,10 @@ export default function AjoutArticleStockPage() {
     }
   };
 
-
   return (
     <div className="p-6 max-w-xl mx-auto bg-white rounded-xl shadow-sm border border-gray-100 mt-10">
       <div className="mb-6">
-        <h1 className="text-xl font-bold text-gray-900">Configuration Catalogue</h1>
+        <h1 className="text-xl font-bold text-gray-900">Enregistrez vos articles en stock</h1>
         <p className="text-xs text-gray-500 mt-1">Ajoutez un nouvel article ou une marchandise de gros disponible à la vente.</p>
       </div>
 
@@ -144,7 +188,6 @@ export default function AjoutArticleStockPage() {
           <input type="number" name="stock_alerte" value={formData.stock_alerte} onChange={handleChange} required className="w-full border p-2.5 rounded-lg text-sm" placeholder="Alerte si stock inférieur ou égal à..." />
         </div>
 
-        {/* 🔄 ZONE DES BOUTONS DE VALIDATION ET D'ANNULATION */}
         <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
           <button 
             type="submit" 
@@ -158,7 +201,7 @@ export default function AjoutArticleStockPage() {
             type="button" 
             disabled={saving}
             onClick={() => router.push("/dashboard")} 
-            className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 p-3 rounded-lg text-sm font-semibold transition-colors order-2 sm:order-1 disabled:opacity-50"
+            className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 p-3 rounded-lg text-sm font-semibold transition-colors order-2 sm:order-1 disabled:opacity-50"
           >
             ❌ Annuler
           </button>

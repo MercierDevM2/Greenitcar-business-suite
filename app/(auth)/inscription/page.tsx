@@ -18,6 +18,7 @@ function InscriptionFormContent() {
     prenom: "",
     terme: false,
     numero_registre_du_commerce: "",
+    adresse: "",
   });
 
   const [otpCode, setOtpCode] = useState("");
@@ -72,6 +73,7 @@ function InscriptionFormContent() {
     if (!formData.numero_registre_du_commerce)
       newErrors.numero_registre_du_commerce =
         "Le numéro de registre du commerce est requis";
+    if (!formData.adresse) newErrors.adresse = "L'adresse est requise";
 
     return newErrors;
   };
@@ -101,6 +103,7 @@ function InscriptionFormContent() {
             telephone: formData.telephone,
             secteur_activite: formData.secteur_activite,
             nombre_employe: formData.nombre_employe,
+            adresse: formData.adresse,
           },
         },
       });
@@ -166,6 +169,7 @@ function InscriptionFormContent() {
               prenom: formData.prenom,
               services_choisis: [], // Initialisé à vide, complété à la page suivante
               numero_registre_du_commerce: formData.numero_registre_du_commerce,
+              adresse: formData.adresse,
             },
           ]);
 
@@ -241,6 +245,7 @@ const ouvrirModal = (type: "cgu" | "privacy") => {
             secteur_activite: formData.secteur_activite,
             nombre_employe: formData.nombre_employe,
             numero_registre_du_commerce: formData.numero_registre_du_commerce,
+            adresse: formData.adresse,
           },
         },
       });
@@ -535,6 +540,23 @@ const ouvrirModal = (type: "cgu" | "privacy") => {
                     <p className="text-red-600 dark:text-red-400 text-sm mt-1">{errors.telephone}</p>
                   )}
                 </div>
+
+                <div>
+                  <label className="block text-slate-800 dark:text-slate-200 text-sm font-semibold mb-2">
+                    Adresse *
+                  </label>
+                  <input
+                    type="text"
+                    name="adresse"
+                    value={formData.adresse}
+                    onChange={handleChange}
+                    placeholder="Ex: 123 Rue de l'Entreprise, Ville, Pays"
+                    className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                  />
+                  {errors.adresse && (
+                    <p className="text-red-600 dark:text-red-400 text-sm mt-1">{errors.adresse}</p>
+                  )}
+                </div>  
 
                 <div>
                   <label className="block text-slate-800 dark:text-slate-200 text-sm font-semibold mb-2">

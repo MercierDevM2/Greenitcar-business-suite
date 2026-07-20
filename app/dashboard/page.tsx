@@ -201,65 +201,123 @@ export default function DashboardPage() {
 
 
 
-const loadFactureData = async (uid: string) => {
-  try {
-    // 1. Récupération globale depuis Dexie
-    const [facturesLocales, produitsLocaux, itemsFacturesLocaux] = await Promise.all([
-      db["gf_factures"].where("utilisateur_id").equals(uid).toArray(),
-      db["gf_produits"].where("utilisateur_id").equals(uid).toArray(),
-      db["gf_facture_items"] ? db["gf_facture_items"].where("utilisateur_id").equals(uid).toArray() : Promise.resolve([]),
-    ]);
+interface FactureType {
+  id: string;
+  utilisateur_id: string;
+  total_ht: number;
+  total_ttc?: number;
+  benefice_realise: number;
+  statut_synchro: string;
+}
 
-    // 🚨 RÈGLE STRICTE HORS-LIGNE : On supprime le statut "local" / "pending" pour geler le Dashboard
+interface ProduitType {
+  id: string;
+  utilisateur_id: string;
+  nom: string;
+  stock_initial: number;
+  stock_actuel: number;
+  stock_alerte: number;
+  prix_achat: number;
+  statut_synchro: string;
+}
+
+interface ItemFactureType {
+  id: string;
+  facture_id: string;
+  produit_id: string;
+  quantite: number;
+  statut_synchro: string;
+}
+
+const loadFactureData = async (uid: string): Promise<{
+  alertesCount: number;
+  totalValeurStock: number;
+  totalCA: number;
+  totalMarge: number;
+}> => {
+  if (!uid) {
+    return { alertesCount: 0, totalValeurStock: 0, totalCA: 0, totalMarge: 0 };
+  }
+
+  try {
+    // 1. Récupération globale depuis Dexie avec forçage de type (casting)
+    const facturesLocales = (await db["gf_factures"].where("utilisateur_id").equals(uid).toArray()) as FactureType[];
+    const produitsLocaux = (await db["gf_produits"].where("utilisateur_id").equals(uid).toArray()) as ProduitType[];
+    
+    let itemsFacturesLocaux: ItemFactureType[] = [];
+    if (db["gf_facture_items"]) {
+      itemsFacturesLocaux = (await db["gf_facture_items"].where("utilisateur_id").equals(uid).toArray()) as ItemFactureType[];
+    }
+
+    // ✅ CORRECTION : Autorisation du statut "local" pour inclure les ventes hors-ligne directes
     const facturesCache = facturesLocales.filter(
-      (f: any) => f.statut_synchro === "synced" || f.statut_synchro === "synchronise"
+      (f) => f.statut_synchro === "synced" || f.statut_synchro === "synchronise" || f.statut_synchro === "local"
     );
 
     const produitsCache = produitsLocaux.filter(
-      (p: any) => p.statut_synchro === "synced" || p.statut_synchro === "synchronise"
+      (p) => p.statut_synchro === "synced" || p.statut_synchro === "synchronise" || p.statut_synchro === "local"
     );
 
     const itemsCache = itemsFacturesLocaux.filter(
-      (i: any) => i.statut_synchro === "synced" || i.statut_synchro === "synchronise"
+      (i) => i.statut_synchro === "synced" || i.statut_synchro === "synchronise" || i.statut_synchro === "local"
     );
 
-    // 🔄 MAP DES QUANTITÉS SORTIES PAR PRODUIT (Uniquement sur données synchronisées)
+    // 🔄 Indexation sécurisée : Conversion forcée de l'ID en String pour éviter les conflits string/number
+    const facturesMap = new Map<string, FactureType>(
+      facturesCache.map((f) => [String(f.id).trim(), f])
+    );
+
+    // 🔄 MAP DES QUANTITÉS SORTIES PAR PRODUIT
     const quantitesSortiesMap = new Map<string, number>();
-    itemsCache.forEach((item: any) => {
-      const factureAssociee = facturesCache.find((f: any) => f.id === item.facture_id);
+    
+    itemsCache.forEach((item) => {
+      // Recherche sécurisée avec conversion en String et nettoyage des espaces
+      const factureAssociee = facturesMap.get(String(item.facture_id).trim());
 
       if (factureAssociee) {
-        const qteActuelle = quantitesSortiesMap.get(item.produit_id) || 0;
-        quantitesSortiesMap.set(item.produit_id, qteActuelle + (Number(item.quantite) || 0));
+        const produitIdStr = String(item.produit_id).trim();
+        const qteActuelle = quantitesSortiesMap.get(produitIdStr) || 0;
+        quantitesSortiesMap.set(produitIdStr, qteActuelle + (Number(item.quantite) || 0));
       }
     });
 
-    // 📊 CALCULS STOCKS AVEC DÉCOMPTE AUTOMATIQUE FIGÉ
+        // 📊 CALCULS STOCKS AVEC DÉCOMPTE AUTOMATIQUE FIGÉ ET SÉCURISÉ
     let alertesCount = 0;
     let totalValeurStock = 0;
 
-    produitsCache.forEach((p: any) => {
-      const qteSortie = quantitesSortiesMap.get(p.id) || 0;
-      const stockDynamique = Math.max(0, (Number(p.stock_initial) || Number(p.stock_actuel) || 0) - qteSortie);
+    produitsCache.forEach((p) => {
+      // 1. Extraction et nettoyage de l'ID produit
+      const idProduit = String(p.id).trim();
+      const qteSortie = quantitesSortiesMap.get(idProduit) || 0;
+      
+      // 2. Forçage strict du type Number pour les calculs de stocks
+      const stockInitial = Number(p.stock_initial) ?? Number(p.stock_actuel) ?? 0;
+      const stockDynamique = Math.max(0, stockInitial - qteSortie);
 
-      if (stockDynamique <= (Number(p.stock_alerte) || 0)) {
-        alertesCount++; // on incrémente le compteur d'alertes si le stock dynamique est inférieur ou égal au seuil d'alerte
+      // 3. Forçage strict du type Number pour le seuil d'alerte
+      // Vérification croisée des propriétés alternatives courantes (stock_alerte ou alerte)
+      const seuilConfiguration = Number(p.stock_alerte) ?? Number((p as any).alerte) ?? 0;
+
+      // 4. Comparaison mathématique stricte
+      if (stockDynamique <= seuilConfiguration) {
+        alertesCount++;
       }
-      totalValeurStock += (Number(p.prix_achat) || 0) * stockDynamique; // somme des prix d'achat * stock dynamique
+      
+      totalValeurStock += (Number(p.prix_achat) || 0) * stockDynamique;
     });
 
     // 💰 CALCULS FINANCIERS 
     const totalCA = facturesCache.reduce(
-      (sum: number, f: any) => sum + (Number(f.total_ht) || 0),
+      (sum, f) => sum + (Number(f.total_ht) || 0),
       0
     );
 
     const totalMarge = facturesCache.reduce(
-      (sum: number, f: any) => sum + (Number(f.benefice_realise) || 0),
+      (sum, f) => sum + (Number(f.benefice_realise) || 0),
       0
     );
 
-    // Injection dans l'état comptable verrouillé du commerce
+    // Injection propre et typée dans l'état comptable
     setRawFacturation({
       factures: facturesCache,
       produits: produitsCache,
@@ -275,9 +333,6 @@ const loadFactureData = async (uid: string) => {
     return { alertesCount: 0, totalValeurStock: 0, totalCA: 0, totalMarge: 0 };
   }
 };
-
-
-
 
 useEffect(() => {
   if (!userId || !currentAnnee) return;
@@ -794,8 +849,21 @@ useEffect(() => {
       </div>
       
       <div className="flex flex-wrap items-center gap-4">
+        {/* Liste de stock */}
+        {activeServices.includes("facture") && (
+          
+          <button
+            onClick={() => router.push("/dashboard/parametres/listestock?module=facture")}
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-orange-600 hover:bg-black text-white font-semibold text-sm rounded-xl shadow-sm transition-colors w-full sm:w-auto"
+          >
+           🏠Stock
+          </button>
+        )}
+
+
         {/* BOUTON D'ACTION RAPIDE POUR LA FACTURATION */}
         {activeServices.includes("facture") && (
+          
           <button
             onClick={() => router.push("/dashboard/saisies?module=facture")}
             className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm rounded-xl shadow-sm transition-colors w-full sm:w-auto"

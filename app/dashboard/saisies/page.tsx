@@ -22,10 +22,12 @@ function SaisieFormContent() {
   const [userId, setUserId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [nomEntreprise, setNomEntreprise] = useState<string>("Mon Entreprise");
+  const [nomEntreprise, setNomEntreprise] = useState<string>("");
   const [formData, setFormData] = useState<any>({});
   const [anneesScolaires, setAnneesScolaires] = useState<any[]>([]);
   const [classes, setClasses] = useState<any[]>([]);
+  const [adresse, setAdresseEntreprise] = useState<string>("");
+  const [telephone, setTelephoneEntreprise] = useState<string>("");
   const [rawEleves, setRawEleves] = useState({
     inscriptions: [] as any[],
     paiements: [] as any[],
@@ -36,59 +38,64 @@ function SaisieFormContent() {
   const [articlesCatalogue, setArticlesCatalogue] = useState<any[]>([]);
 
   // Authentification et fallback cache local
+// 1. Authentification et récupération du profil (Identique à la logique Layout)
 useEffect(() => {
   async function getAuth() {
-    let activeUid: string | null = null;
-
-    // 1. TENTATIVE SÉCURISÉE SUR SUPABASE
-    try {
-      if (navigator.onLine) {
-        const { data: { user }, error } = await supabase.auth.getUser();
-        if (!error && user) {
-          activeUid = user.id;
-          
-          // Sauvegarde ou mise à jour de l'utilisateur en local pour le mode hors-ligne
-          const { data: userData } = await supabase
-            .from("utilisateurs")
-            .select("nom_entreprise")
-            .eq("id", user.id)
-            .single();
-
-          if (userData?.nom_entreprise) {
-            setNomEntreprise(userData.nom_entreprise);
-            await db.utilisateurs.put({
-              id: user.id,
-              nom_entreprise: userData.nom_entreprise
-            });
-          }
-        }
-      }
-    } catch (netError) {
-      console.log("Supabase Auth inaccessible (Mode hors-ligne), bascule sur Dexie...");
-    }
-
-    // 2. REPLI SUR DEXIE SI SUPABASE A ÉCHOUÉ OU SI ON EST HORS-LIGNE
-    if (!activeUid) {
+    // Si l'utilisateur est hors-ligne au moment du rechargement de la page de saisie,
+    // on va immédiatement chercher l'unique utilisateur dans Dexie
+    if (!navigator.onLine) {
       try {
         const utilisateursLocaux = await db.utilisateurs.limit(1).toArray();
         if (utilisateursLocaux && utilisateursLocaux.length > 0) {
-          activeUid = utilisateursLocaux[0].id;
-          setNomEntreprise(utilisateursLocaux[0].nom_entreprise || "Mon Entreprise Locale");
-          console.log("Utilisateur local récupéré depuis Dexie :", activeUid);
+          setUserId(utilisateursLocaux[0].id);
+          setNomEntreprise(utilisateursLocaux[0].nom_entreprise || "Entreprise Locale");
+          setAdresseEntreprise(utilisateursLocaux[0].adresse || "");
+          setTelephoneEntreprise(utilisateursLocaux[0].telephone || "");
         }
       } catch (dexieError) {
-        console.error("Impossible de lire la table utilisateurs dans Dexie", dexieError);
+        console.error("Erreur de récupération locale Dexie :", dexieError);
       }
+      return;
     }
 
-    // 3. ENREGISTREMENT DE L'ID UTILISATEUR RETROUVÉ
-    if (activeUid) {
-      setUserId(activeUid);
+    // Si on est en ligne, on interroge la source de vérité : Supabase
+    try {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) return;
+
+      // Récupération du profil depuis la table utilisateurs
+      const { data: userData, error: dbError } = await supabase
+        .from("utilisateurs")
+        .select("nom_entreprise, adresse, telephone")
+        .eq("id", user.id)
+        .single();
+    
+      if (dbError) {
+        console.error("Erreur Supabase Saisie Profil :", dbError.message);
+        return;
+      }
+
+      if (userData) {
+        setUserId(user.id);
+        setNomEntreprise(userData.nom_entreprise || "Entreprise");
+        setAdresseEntreprise(userData.adresse || "");
+        setTelephoneEntreprise(userData.telephone || "");
+        // Sauvegarde locale de secours dans Dexie (pour les futurs accès hors-ligne)
+        await db.utilisateurs.put({
+          id: user.id,
+          nom_entreprise: userData.nom_entreprise || "Entreprise",
+          adresse_entreprise: userData.adresse || "",
+          telephone_entreprise: userData.telephone || "",
+        });
+      }
+    } catch (e) {
+      console.error("Erreur réseau authentification page saisie :", e);
     }
   }
 
   getAuth();
 }, []);
+
 
     // Chargement hybride (Dexie en priorité pour le mode hors-ligne)
   useEffect(() => {
@@ -494,21 +501,46 @@ useEffect(() => {
 
 
 return (
-    <div className="max-w-xl mx-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-8 rounded-2xl shadow-sm">
+  <div className="max-w-xl mx-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-8 rounded-2xl shadow-sm">
+    
+    <div className="mb-6">
+      <span className="text-xs font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1 rounded-md">
+        Soyez la Bienvenue chez {nomEntreprise}
+      </span>
       
-      <div className="mb-6">
-        <span className="text-xs font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1 rounded-md">
-          Saisie Module : Green{currentModule.charAt(0).toUpperCase() + currentModule.slice(1)}
-        </span>
-        <h1 className="text-xl font-bold text-slate-900 dark:text-white mt-3">Ajouter un enregistrement</h1>
-        <h2 className="text-sm font-semibold text-emerald-600 uppercase tracking-wider mt-1">
-          {nomEntreprise} — {currentModule.charAt(0).toUpperCase() + currentModule.slice(1)}
-        </h2>
-      </div>
+      {/* 🎯 TITRE PRINCIPAL DYNAMIQUE */}
+      <h1 className="text-xl font-bold text-slate-900 dark:text-white mt-3">
+        {(() => {
+          switch (currentModule) {
+            case "school":
+              return "Enregistrer un élève";
+            case "school_paiement":
+              return "Encaisser une tranche de scolarité";
+            case "facture":
+              return `Facture de: ${nomEntreprise}`;
+            case "school_enseignant":
+              return "Enregistrer un enseignant";
+            default:
+              return "Ajouter un enregistrement";
+          }
+        })()}
+      </h1>
 
-      <form onSubmit={handleSubmit} className="space-y-5">
-        
-            {/* ==================== CONFIGURATION COMPTABILITÉ : GREENFACTURE ==================== */}
+      {/* 🏢 NOM DE L'ENTREPRISE ET LOGIQUE D'ADRESSE */}
+      <div className="mt-1">
+        {/* Affichage de l'adresse sous le nom uniquement pour facture ou stock */}
+        {(currentModule === "facture" || currentModule === "stock") && adresse && (
+          <p className="flex flex-col text-xs text-slate-500 dark:text-slate-400 font-medium italic mt-0.5 space-y-0.5">
+            <span>{telephone ? `Lieu: ${telephone}` : "Téléphone non renseigné"}</span>
+            <span>{adresse ? `Adresse: ${adresse}` : "Adresse non renseignée"}</span>
+          </p>
+        )}
+      </div>
+    </div>
+
+    <form onSubmit={handleSubmit} className="space-y-5">
+      
+      {/* ==================== CONFIGURATION COMPTABILITÉ : GREENFACTURE ==================== */}
       {currentModule === "facture" && (
         <div className="space-y-6">
           {/* Conteneur Facture Style "Papier" */}
@@ -889,7 +921,7 @@ return (
               />
             </div>
 
-                       <div>
+              <div>
               <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                 Réduction / Remise (FCFA)
               </label>
@@ -1163,9 +1195,6 @@ return (
        {/* 2. Encaisser une tranche de scolarité */}
           {currentModule === "school_paiement" && (
             <>
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4">
-                Encaisser une tranche de scolarité
-              </h3>
               
               {/* 1. Sélection de l'élève avec filtre de recherche de texte */}
               <div className="relative mb-4">

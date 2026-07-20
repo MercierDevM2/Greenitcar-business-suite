@@ -9,32 +9,61 @@ export async function declencherSynchronisation() {
     return;
   }
 
-  // 2. 💡 LE BLINDAGE REEL : On vérifie si on accède VRAIMENT aux serveurs distants de Supabase
+  // 2. LE BLINDAGE RÉEL : On vérifie si on accède VRAIMENT aux serveurs distants de Supabase
   try {
     const urlSupabase = process.env.NEXT_PUBLIC_SUPABASE_URL;
     if (!urlSupabase) return;
     
-    // On effectue un HEAD request ultra-léger sur l'endpoint REST de Supabase pour valider le réseau
     const verifReseau = await fetch(`${urlSupabase}/rest/v1/`, { method: "HEAD", mode: "no-cors" });
     if (!verifReseau) throw new Error("Pas de réponse Internet de Supabase");
   } catch (pingError) {
     console.log("🔌 Vrai Internet absent (Impossible de joindre Supabase). Mode hors-ligne strict conservé.");
-    return; // ⛔ COUPURE DIRECTE : Le script s'arrête ici et ne touchera JAMAIS aux statuts Dexie en local !
+    return; 
   }
 
   console.log("🌐 Vrai Internet détecté et Supabase accessible ! Lancement de la synchronisation...");
 
-  // 3. 🛠️ AJOUT COMPILATION : Déclaration de la fonction interne de nettoyage des identifiants (UUID vs BigInt)
+  // 3. Nettoyage propre du payload (Retire uniquement le statut de synchro local)
   const preparerPayload = (item: any) => {
-    if (item && typeof item.id === "string" && item.id.includes("-")) {
-      const { id, statut_synchro, ...reste } = item;
-      return reste; // Envoie sans l'id texte temporaire pour laisser Supabase attribuer un BigInt auto-incrémenté
-    }
+    if (!item) return {};
     const { statut_synchro, ...reste } = item;
-    return { id: item.id, ...reste };
+    return reste; // On conserve l'ID généré en local pour l'envoyer au Cloud
   };
 
-  // --- 1. SYNCHRONISATION DES FACTURES (GreenFacture) ---
+  // ==========================================
+  // --- MODULE 1 : GREENSTOCK & GREENFACTURE ---
+  // ==========================================
+
+  // --- 1. SYNCHRONISATION DES PRODUITS (GreenStock) ---
+  try {
+    const produitsAEnvoyer = await db.gf_produits.where('statut_synchro').equals('local').toArray();
+    for (const prod of produitsAEnvoyer) {
+      await db.gf_produits.update(prod.id, { statut_synchro: 'en_cours' });
+      
+      const payload = {
+        id: prod.id,
+        utilisateur_id: prod.utilisateur_id,
+        nom: prod.nom,
+        prix_achat: Number(prod.prix_achat) || 0,
+        prix_vente: Number(prod.prix_vente) || 0,
+        stock_initial: Number(prod.stock_initial) || Number(prod.stock_actuel) || 0,
+        stock_actuel: Number(prod.stock_actuel) || 0,
+        stock_alerte: Number(prod.stock_alerte) || 0,
+        unite_mesure: prod.unite_mesure || "Sac"
+      };
+
+      const { error } = await supabase.from("gf_produits").upsert(preparerPayload(payload));
+      
+      if (error) { 
+        console.error("Échec d'envoi produit:", error.message);
+        await db.gf_produits.update(prod.id, { statut_synchro: 'local' }); 
+        continue; 
+      }
+      await db.gf_produits.update(prod.id, { statut_synchro: 'synced' });
+    }
+  } catch (err) { console.error("Erreur synchro stock:", err); }
+
+  // --- 2. SYNCHRONISATION DES FACTURES (GreenFacture) ---
   try {
     const facturesAEnvoyer = await db.gf_factures.where('statut_synchro').equals('local').toArray();
     for (const facture of facturesAEnvoyer) {
@@ -44,11 +73,11 @@ export async function declencherSynchronisation() {
         id: facture.id,
         utilisateur_id: facture.utilisateur_id,
         client_nom: facture.client_nom,
-        total_ttc: facture.total_ttc,
-        total_ht: facture.total_ht,
-        benefice_realise: facture.benefice_realise,
-        statut: facture.statut,
-        created_at: facture.cree_le
+        total_ttc: Number(facture.total_ttc) || 0,
+        total_ht: Number(facture.total_ht) || 0,
+        benefice_realise: Number(facture.benefice_realise) || 0,
+        statut: facture.statut || "payee",
+        created_at: facture.cree_le || facture.created_at || new Date().toISOString()
       };
 
       const { error } = await supabase.from("gf_factures").upsert(preparerPayload(payload));
@@ -62,33 +91,39 @@ export async function declencherSynchronisation() {
     }
   } catch (err) { console.error("Erreur synchro factures:", err); }
 
-  // --- 2. SYNCHRONISATION DES PRODUITS (GreenStock) ---
+  // --- 2b. AJOUTÉ : SYNCHRONISATION DES ITEMS DE FACTURES ---
   try {
-    const produitsAEnvoyer = await db.gf_produits.where('statut_synchro').equals('local').toArray();
-    for (const prod of produitsAEnvoyer) {
-      await db.gf_produits.update(prod.id, { statut_synchro: 'en_cours' });
+    if (db["gf_facture_items"]) {
+      const itemsAEnvoyer = await db.gf_facture_items.where('statut_synchro').equals('local').toArray();
       
-      const payload = {
-        id: prod.id,
-        utilisateur_id: prod.utilisateur_id,
-        nom: prod.nom,
-        prix_achat: prod.prix_achat,
-        prix_vente: prod.prix_vente,
-        stock_initial: prod.stock_initial || prod.stock_actuel,
-        stock_actuel: prod.stock_actuel,
-        stock_alerte: prod.stock_alerte
-      };
+      for (const item of itemsAEnvoyer) {
+        await db.gf_facture_items.update(item.id, { statut_synchro: 'en_cours' });
+        
+        const payload = {
+          id: item.id,
+          utilisateur_id: item.utilisateur_id,
+          facture_id: item.facture_id,
+          produit_id: item.produit_id,
+          quantite: Number(item.quantite) || 0,
+          prix_unitaire: Number(item.prix_unitaire) || 0
+        };
 
-      const { error } = await supabase.from("gf_produits").upsert(preparerPayload(payload));
-      
-      if (error) { 
-        console.error("Échec d'envoi produit:", error.message);
-        await db.gf_produits.update(prod.id, { statut_synchro: 'local' }); 
-        continue; 
+        const { error } = await supabase.from("gf_facture_items").upsert(preparerPayload(payload));
+        
+        if (error) {
+          console.error("Échec d'envoi item facture:", error.message);
+          await db.gf_facture_items.update(item.id, { statut_synchro: 'local' });
+          continue;
+        }
+        await db.gf_facture_items.update(item.id, { statut_synchro: 'synced' });
       }
-      await db.gf_produits.update(prod.id, { statut_synchro: 'synced' });
     }
-  } catch (err) { console.error("Erreur synchro stock:", err); }
+  } catch (err) { console.error("Erreur synchro items factures:", err); }
+
+
+  // ==========================================
+  // --- MODULE 2 : GREENSCHOOL ----------------
+  // ==========================================
 
   // --- 3. SYNCHRONISATION DES ÉLÈVES (GreenSchool) ---
   try {
