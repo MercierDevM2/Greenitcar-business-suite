@@ -2,18 +2,25 @@ import { db } from "./db";
 import { supabase } from "../utils/supabase";
 
 const TABLES_MIGRATION = [
-  { locale: "gf_factures", serveur: "gf_factures" },
+ // 🟢 1. On envoie les produits d'abord (indépendants)
   { locale: "gf_produits", serveur: "gf_produits" },
+  
+  // 🟢 2. On envoie l'en-tête de la facture ensuite
+  { locale: "gf_factures", serveur: "gf_factures" },
+  
+  // 🟢 3. On envoie les lignes de détails en dernier (qui dépendent des produits et des factures)
+  { locale: "gf_facture_items", serveur: "gf_facture_items" },
   { locale: "gs_annees_scolaires", serveur: "gs_annees_scolaires" },
   { locale: "gs_classes", serveur: "gs_classes" },
   { locale: "gs_eleves", serveur: "gs_eleves" },
   { locale: "gs_inscriptions", serveur: "gs_inscriptions" },
   { locale: "gs_paiements", serveur: "gs_paiements" },
-   { locale: "gs_enseignants", serveur: "gs_enseignants" },
+  { locale: "gs_enseignants", serveur: "gs_enseignants" },
   { locale: "gp_employes", serveur: "gp_employes" },
   { locale: "ga_patrimoine", serveur: "ga_patrimoine" },
   { locale: "gpt_pointages", serveur: "gpt_pointages" }
 ];
+
 
 export async function exporterDonneesLocales(userId: string) {
   console.log("📤 Début de l'exportation des données locales...");
@@ -51,12 +58,14 @@ export async function exporterDonneesLocales(userId: string) {
           return baseRow;
         });
 
-        const { error } = await supabase.from(table.serveur).upsert(donneesPropres);
+        // À l'intérieur de la boucle for (const table of TABLES_MIGRATION)
+          const { error } = await supabase.from(table.serveur).upsert(donneesPropres);
 
-        if (error) {
-          console.error(`❌ Erreur d'envoi Supabase [${table.serveur}] :`, error.message);
-          throw error;
-        }
+          if (error) {
+            console.error(`❌ Erreur d'envoi Supabase [${table.serveur}] :`, error.message);
+            continue; // 🚀 REMPLACEZ "throw error" PAR "continue" pour ne pas bloquer les autres tables !
+          }
+
 
         // @ts-ignore
         await db[table.locale]

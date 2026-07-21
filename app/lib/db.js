@@ -3,7 +3,7 @@ import Dexie from 'dexie';
 export const db = new Dexie('GreenItCarDB');
 
 // --- 🎯 TOUTES LES TABLES REGROUPÉES DANS LA VERSION ACTIVE (VERSION 2) ---
-db.version(2).stores({
+db.version(3).stores({
   // Table Profil
   utilisateurs: 'id, email, services_choisis, nom_entreprise',
   

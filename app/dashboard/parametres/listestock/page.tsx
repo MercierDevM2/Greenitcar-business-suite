@@ -292,48 +292,64 @@ export default function ListeArticlesStockPage() {
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/50 text-sm text-slate-700 dark:text-slate-300">
                 {articlesFiltres.map((art) => {
-                  const qteSortie = quantitesSorties.get(String(art.id)) || 0;
-                  const stockInitial = Number(art.stock_initial) || Number(art.stock_actuel) || 0;
-                  const stockDynamique = Math.max(0, stockInitial - qteSortie);
-                  const estEnAlerte = stockDynamique <= (Number(art.stock_alerte) || 0);
+                const qteSortie = quantitesSorties.get(String(art.id)) || 0;
+                const stockInitial = Number(art.stock_initial) || Number(art.stock_actuel) || 0;
+                const stockDynamique = Math.max(0, stockInitial - qteSortie);
+                const seuilAlerte = Number(art.stock_alerte) || 0;
 
-                  return (
-                    <tr key={art.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
-                      <td className="py-3.5 px-4 font-semibold text-slate-900 dark:text-white">
-                        {art.nom}
-                      </td>
-                      <td className="py-3.5 px-4 text-right font-mono text-xs text-slate-600 dark:text-slate-400">
-                        {Number(art.prix_achat).toLocaleString()} FCFA
-                      </td>
-                      <td className="py-3.5 px-4 text-right font-mono text-xs text-emerald-600 dark:text-emerald-400 font-semibold">
-                        {Number(art.prix_vente).toLocaleString()} FCFA
-                      </td>
-                      <td className="py-3.5 px-4 text-center font-mono text-xs text-slate-400 dark:text-slate-500">
-                        {stockInitial}
-                      </td>
-                      <td className="py-3.5 px-4 text-center">
-                        <span className={`inline-block px-2.5 py-1 rounded-md text-xs font-bold font-mono ${
-                          estEnAlerte 
-                            ? "bg-rose-50 text-rose-600 dark:bg-rose-950/30 dark:text-rose-400" 
-                            : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-400"
-                        }`}>
-                          {stockDynamique}
+                // 1. Définition précise des 3 états possibles
+                const estEnRupture = stockDynamique <= 0;
+                const estEnAlerte = !estEnRupture && stockDynamique <= seuilAlerte;
+
+                // 2. Gestion dynamique de la couleur du chiffre de la quantité restante
+                let couleurBadgeQuantite = "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-400";
+                if (estEnRupture) {
+                  couleurBadgeQuantite = "bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-400";
+                } else if (estEnAlerte) {
+                  couleurBadgeQuantite = "bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400";
+                }
+
+                return (
+                  <tr key={art.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
+                    <td className="py-3.5 px-4 font-semibold text-slate-900 dark:text-white">
+                      {art.nom}
+                    </td>
+                    <td className="py-3.5 px-4 text-right font-mono text-xs text-slate-600 dark:text-slate-400">
+                      {Number(art.prix_achat).toLocaleString()} FCFA
+                    </td>
+                    <td className="py-3.5 px-4 text-right font-mono text-xs text-emerald-600 dark:text-emerald-400 font-semibold">
+                      {Number(art.prix_vente).toLocaleString()} FCFA
+                    </td>
+                    <td className="py-3.5 px-4 text-center font-mono text-xs text-slate-400 dark:text-slate-500">
+                      {stockInitial}
+                    </td>
+                    
+                    {/* Colonne : Qté Restante */}
+                    <td className="py-3.5 px-4 text-center">
+                      <span className={`inline-block px-2.5 py-1 rounded-md text-xs font-bold font-mono ${couleurBadgeQuantite}`}>
+                        {stockDynamique}
+                      </span>
+                    </td>
+
+                    {/* Colonne : Statut à 3 états (Rupture / Alerte / Disponible) */}
+                    <td className="py-3.5 px-4 text-center">
+                      {estEnRupture ? (
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-red-600 bg-red-50 dark:bg-red-950/30 px-2 py-0.5 rounded">
+                          Rupture
                         </span>
-                      </td>
-                      <td className="py-3.5 px-4 text-center">
-                        {estEnAlerte ? (
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-rose-500 bg-rose-50 dark:bg-rose-950/20 px-2 py-0.5 rounded">
-                            Alerte
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-500 bg-emerald-50 dark:bg-emerald-950/20 px-2 py-0.5 rounded">
-                            Disponible
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                      ) : estEnAlerte ? (
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-amber-600 bg-amber-50 dark:bg-amber-950/20 px-2 py-0.5 rounded">
+                          Alerte
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-500 bg-emerald-50 dark:bg-emerald-950/20 px-2 py-0.5 rounded">
+                          Disponible
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               </tbody>
             </table>
           </div>
