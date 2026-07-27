@@ -31,7 +31,7 @@ export default function SolutionsPage() {
       
       <div className="max-w-4xl mx-auto">
 
-        ${/* En-tête */}
+        {/* En-tête */}
         <div className="text-center mb-12">
           <span className="text-emerald-600 dark:text-emerald-400 font-bold uppercase tracking-wider text-sm">Applications Métiers</span>
           <h1 className="text-4xl font-black text-slate-900 dark:text-white mt-2 sm:text-5xl">
