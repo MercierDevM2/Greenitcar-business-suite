@@ -135,27 +135,28 @@ export default function Home() {
       </section>
 
       {menuOpen ? (
-        <nav className="mx-auto mt-2 flex max-w-7xl flex-col gap-2 px-6 pb-4 text-sm text-slate-200 md:hidden">
-          <Link href="/solutions" className="rounded-xl bg-slate-900/90 px-3 py-2 transition hover:bg-slate-800 hover:text-white" onClick={() => setMenuOpen(false)}>
-            Solutions
-          </Link>
-          <Link href="/secteurs" className="rounded-xl bg-slate-900/90 px-3 py-2 transition hover:bg-slate-800 hover:text-white" onClick={() => setMenuOpen(false)}>
-            Secteurs
-          </Link>
-          <Link href="/tarifs" className="rounded-xl bg-slate-900/90 px-3 py-2 transition hover:bg-slate-800 hover:text-white" onClick={() => setMenuOpen(false)}>
-            Tarifs
-          </Link>
-          <Link href="/apropos" className="rounded-xl bg-slate-900/90 px-3 py-2 transition hover:bg-slate-800 hover:text-white" onClick={() => setMenuOpen(false)}>
-            À propos
-          </Link>
-          <Link href="/contact" className="rounded-xl bg-slate-900/90 px-3 py-2 transition hover:bg-slate-800 hover:text-white" onClick={() => setMenuOpen(false)}>
-            Contact
-          </Link>
-          <Link href="/connexion" className="rounded-xl bg-slate-900/90 px-3 py-2 transition hover:bg-slate-800 hover:text-white" onClick={() => setMenuOpen(false)}>
-            Connexion
-          </Link>
-        </nav>
-      ) : null}
+  <nav className="mx-auto mt-2 flex max-w-7xl flex-col gap-2 px-6 pb-4 text-sm text-slate-200 md:hidden">
+    {/* Ajout de /landingpage devant chaque chemin */}
+    <Link href="/landingpage/solutions" className="rounded-xl bg-slate-900/90 px-3 py-2 transition hover:bg-slate-800 hover:text-white" onClick={() => setMenuOpen(false)}>
+      Solutions
+    </Link>
+    <Link href="/landingpage/secteurs" className="rounded-xl bg-slate-900/90 px-3 py-2 transition hover:bg-slate-800 hover:text-white" onClick={() => setMenuOpen(false)}>
+      Secteurs
+    </Link>
+    <Link href="/landingpage/tarifs" className="rounded-xl bg-slate-900/90 px-3 py-2 transition hover:bg-slate-800 hover:text-white" onClick={() => setMenuOpen(false)}>
+      Tarifs
+    </Link>
+    <Link href="/landingpage/apropos" className="rounded-xl bg-slate-900/90 px-3 py-2 transition hover:bg-slate-800 hover:text-white" onClick={() => setMenuOpen(false)}>
+      À propos
+    </Link>
+    <Link href="/landingpage/contact" className="rounded-xl bg-slate-900/90 px-3 py-2 transition hover:bg-slate-800 hover:text-white" onClick={() => setMenuOpen(false)}>
+      Contact
+    </Link>
+    <Link href="/connexion" className="rounded-xl bg-slate-900/90 px-3 py-2 transition hover:bg-slate-800 hover:text-white" onClick={() => setMenuOpen(false)}>
+      Connexion
+    </Link>
+  </nav>
+) : null}
 
       <main>
         <section className="mx-auto grid max-w-7xl gap-10 px-6 py-16 lg:grid-cols-[1.1fr_0.9fr] lg:px-8 lg:py-24">
