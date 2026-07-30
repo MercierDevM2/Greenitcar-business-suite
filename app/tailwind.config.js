@@ -1,24 +1,23 @@
+/** @type {import('tailwindcss').Config} */
 module.exports = {
+  content: [
+    "./app/**/*.{js,ts,jsx,tsx,mdx}",
+    "./components/**/*.{js,ts,jsx,tsx,mdx}",
+    "./pages/**/*.{js,ts,jsx,tsx,mdx}",
+  ],
   theme: {
     extend: {
-      animation: {
-        'magic-spinner': 'magicTransform 2.5s cubic-bezier(0.4, 0, 0.2, 1) infinite',
-      },
       keyframes: {
-        magicTransform: {
-          '0%': { 
-            transform: 'rotate(0deg)', 
-            backgroundImage: 'linear-gradient(to right, #10b981, #06b6d4)' // Emerald à Cyan
-          },
-          '50%': { 
-            backgroundImage: 'linear-gradient(to right, #3b82f6, #6366f1)' // Blue à Indigo
-          },
-          '100%': { 
-            transform: 'rotate(360deg)', 
-            backgroundImage: 'linear-gradient(to right, #10b981, #06b6d4)' // Retour au départ
-          },
-        },
+        laserScan: {
+          '0%': { left: '-40%', filter: 'hue-rotate(0deg)' },
+          '50%': { filter: 'hue-rotate(180deg)' },
+          '100%': { left: '100%', filter: 'hue-rotate(360deg)' },
+        }
       },
+      animation: {
+        'magic-laser': 'laserScan 2s infinite linear',
+      }
     },
   },
+  plugins: [],
 }

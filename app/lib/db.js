@@ -5,7 +5,7 @@ export const db = new Dexie('GreenItCarDB');
 // --- 🎯 TOUTES LES TABLES REGROUPÉES DANS LA VERSION ACTIVE (VERSION 2) ---
 db.version(3).stores({
   // Table Profil
-  utilisateurs: 'id, email, services_choisis, nom_entreprise',
+  utilisateurs: 'id, email, services_choisis, nom_entreprise, est_connecte',
   
   // Module Facturation
   gf_factures: 'id, utilisateur_id, client_nom, total_ttc, statut_synchro, cree_le',

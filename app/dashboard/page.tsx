@@ -51,47 +51,115 @@ export default function DashboardPage() {
   });
   
 
-  useEffect(() => {
+useEffect(() => {
   const initDashboard = async (): Promise<void> => {
     try {
-      // 1. 🚨 RÉCUPÉRATION DE LA VRAIE SESSION SUPABASE
-      const { data: { session }, error: authError } = await supabase.auth.getSession();//supabase.auth.getSession() vérifie la présence d'un jeton d'authentification sécurisé et chiffré stocké dans le navigateur.
-      
-      if (authError || !session?.user) {
-        console.warn("⚠️ Aucune session active détectée, redirection...");
-        router.push("/inscription");
-        return;
+      let uid: string | null = null;
+      let anneeId: string | null = null;
+
+      // ==========================================
+      // 📴 CAS 1 : L'UTILISATEUR EST HORS-LIGNE
+      // ==========================================
+      if (typeof window !== "undefined" && !navigator.onLine) {
+        console.log("📴 Mode hors-ligne détecté...");
+        
+        const dbCast = db as any;
+        const utilisateurActif = await dbCast.utilisateurs
+          .where("est_connecte")
+          .equals(1)
+          .first();
+
+        if (!utilisateurActif) {
+          console.warn("⚠️ Aucun utilisateur actif trouvé en cache local. Redirection...");
+          router.push("/inscription");
+          return;
+        }
+
+        uid = utilisateurActif.id;
+
+        const anneeLocale = await dbCast.gs_annees_scolaires
+          .where("utilisateur_id")
+          .equals(uid)
+          .and((a: any) => a.active === true || a.active === 1)
+          .first();
+
+        if (!anneeLocale) {
+          console.warn("⚠️ Aucune année scolaire active trouvée en cache.");
+          setIsInitialSync(false);
+          return;
+        }
+
+        anneeId = String(anneeLocale.id);
+      } 
+      // ==========================================
+      // 🌐 CAS 2 : L'UTILISATEUR EST EN LIGNE (C'est ici qu'on gère le multi-compte)
+      // ==========================================
+      else {
+        const { data: { session }, error: authError } = await supabase.auth.getSession();
+        
+        if (authError || !session?.user) {
+          console.warn("⚠️ Aucune session active détectée, redirection...");
+          router.push("/inscription");
+          return;
+        }
+
+        uid = session.user.id; 
+
+        const { data: anneeData } = await supabase
+          .from("gs_annees_scolaires")
+          .select("id")
+          .eq("utilisateur_id", uid)
+          .eq("active", true)
+          .maybeSingle();
+
+        if (!anneeData) {
+          console.warn("⚠️ Aucune année scolaire active trouvée sur le serveur.");
+          setIsInitialSync(false);
+          return;
+        }
+
+        anneeId = String(anneeData.id);
+
+        // 🌟 LOGIQUE MULTI-COMPTE DÉPORTÉE ICI (Sans toucher au Login) :
+        const dbCast = db as any;
+        
+        // 1. On bascule tous les anciens utilisateurs locaux à 0
+        await dbCast.utilisateurs.toCollection().modify({ est_connecte: 0 });
+        
+        // 2. On récupère le profil sur Supabase pour mettre à jour le cache local
+        const { data: userData } = await supabase
+          .from("utilisateurs")
+          .select("nom_entreprise, adresse, telephone, services_choisis")
+          .eq("id", uid)
+          .maybeSingle();
+
+        // 3. On écrase/sauvegarde ce profil localement en le verrouillant à 1
+        await dbCast.utilisateurs.put({
+          id: uid,
+          email: session.user.email,
+          nom_entreprise: userData?.nom_entreprise || "Entreprise",
+          adresse: userData?.adresse || "",
+          telephone: userData?.telephone || "",
+          services_choisis: userData?.services_choisis || null,
+          est_connecte: 1 // 🎯 Devient le profil actif pour le prochain démarrage hors-ligne
+        });
+
+        await executionSynchronisationGlobale(uid, anneeId);
       }
 
-      // Extraction du véritable UUID de l'utilisateur
-      const uid = session.user.id; 
-
-      // 2. Récupération de l'année scolaire active associée à cet utilisateur sur Supabase
-      const { data: anneeData } = await supabase
-        .from("gs_annees_scolaires")
-        .select("id")
-        .eq("utilisateur_id", uid)
-        .eq("active", true)
-        .maybeSingle();
-
-      if (!anneeData) {
-        console.warn("⚠️ Aucune année scolaire active trouvée sur le serveur pour cet utilisateur.");
+      // ==========================================
+      // 🔒 BARRIÈRE DE SÉCURITÉ TYPESCRIPT & CHARGEMENT
+      // ==========================================
+      if (!uid || !anneeId) {
+        console.warn("⚠️ Impossible d'initialiser : Identifiants manquants.");
         setIsInitialSync(false);
         return;
       }
 
-      const anneeId = String(anneeData.id);
-
-      // Mise à jour sécurisée des variables d'état pour le reste du composant
       setUserId(uid);
       setCurrentAnnee(anneeId);
 
-      // 3. 🚀 SYNCHRONISATION CRITIQUE : Lance le téléchargement des classes de ce VRAI utilisateur
-      if (typeof window !== "undefined" && navigator.onLine) {
-        await executionSynchronisationGlobale(uid, anneeId);
-      }
-
-      // 4. LECTURE DU CACHE : Remplissage immédiat de votre sélecteur de classes
+          
       await loadSchoolData(uid, anneeId);
       await loadFactureData(uid);
 
@@ -100,13 +168,14 @@ export default function DashboardPage() {
         console.error("❌ Erreur d'initialisation du Dashboard :", err.message);
       }
     } finally {
-      // Désactivation de l'écran de chargement
+      // ⚡ CETTE LIGNE EST CRITIQUE POUR DÉBLOQUER L'ÉCRAN
       setIsInitialSync(false);
+      setLoading(false); // 👈 AJOUTEZ CECI ICI pour éteindre le spinner du Dashboard
     }
   };
 
   initDashboard();
-}, [router]); // Ne dépend plus de userId pour éviter la boucle infinie de rendus
+}, [router]);
 
 
 
@@ -127,35 +196,38 @@ export default function DashboardPage() {
       enseignantsLocaux,
       classesLocales,
     ] = await Promise.all([
-      db["gs_inscriptions"].where("annee_id").equals(parsedAnneeId).toArray(),
+      // 🎯 FIX SÉCURITÉ : On filtre sur l'année ET STRICTEMENT sur l'utilisateur connecté
+      db["gs_inscriptions"]
+        .where("annee_id")
+        .equals(parsedAnneeId)
+        .and((ins: any) => ins.utilisateur_id === uid)
+        .toArray(),
       db["gs_eleves"].where("utilisateur_id").equals(uid).toArray(),
       db["gs_paiements"].where("utilisateur_id").equals(uid).toArray(),
       db["gs_enseignants"].where("utilisateur_id").equals(uid).toArray(),
       db["gs_classes"].where("utilisateur_id").equals(uid).toArray(),
     ]);
 
-    // 2. 🔒 VERROUILLAGE DU CACHE : Seules les classes synchronisées avec le Cloud sont conservées
+    // 2. 🔒 CLOISONNEMENT & COMPATIBILITÉ OFFLINE : Autoriser aussi le statut "local"
     const classesCache = classesLocales.filter(
       (c: any) => 
         c.annee_id === parsedAnneeId && 
-        (c.statut_synchro === "synced" || c.statut_synchro === "synchronise")
+        ["synced", "synchronise", "local"].includes(c.statut_synchro) // ⚡ Ajout de "local"
     );
     
-    // Verrouillage des enseignants synchronisés
     const enseignantsCache = enseignantsLocaux.filter(
-      (e: any) => e.statut_synchro === "synced" || e.statut_synchro === "synchronise"
+      (e: any) => ["synced", "synchronise", "local"].includes(e.statut_synchro) // ⚡ Ajout de "local"
     );
 
     const classesMap = new Map(classesCache.map((c: any) => [c.id, c]));
     
-    // Verrouillage des élèves synchronisés
     const elevesCacheMap = new Map(
       elevesLocaux
-        .filter((e: any) => e.statut_synchro === "synced" || e.statut_synchro === "synchronise")
+        .filter((e: any) => ["synced", "synchronise", "local"].includes(e.statut_synchro)) // ⚡ Ajout de "local"
         .map((e: any) => [e.id, e])
     );
 
-    // 3. Reconstitution des jointures (Inscriptions verrouillées sur le cache Cloud)
+    // 3. Reconstitution des jointures
     const inscriptionsCache = inscriptionsLocales.map((ins: any) => {
       const cl = classesMap.get(ins.classe_id) as any;
       const el = elevesCacheMap.get(ins.eleve_id) as any;
@@ -166,24 +238,23 @@ export default function DashboardPage() {
       };
     }).filter(
       (i: any) => 
-        i.utilisateur_id === uid && 
         i.gs_eleves !== null && 
-        (i.statut_synchro === "synced" || i.statut_synchro === "synchronise")
+        ["synced", "synchronise", "local"].includes(i.statut_synchro) // ⚡ Ajout de "local"
     );
 
     const idsCache = new Set<any>((inscriptionsCache || []).map((i: any) => i.id));
     
-    // Verrouillage des paiements synchronisés associés
+    // Verrouillage des paiements associés (Inclus également les reçus hors-ligne)
     const paiementsCache = paiementsLocaux.filter(
       (p: any) => 
         idsCache.has(p.inscription_id) && 
-        (p.statut_synchro === "synced" || p.statut_synchro === "synchronise")
+        ["synced", "synchronise", "local"].includes(p.statut_synchro) // ⚡ Ajout de "local"
     );
 
-    // Mettre à jour le sélecteur HTML du Dashboard uniquement avec les classes officielles
+    // Mettre à jour le sélecteur HTML du Dashboard
     setClasses(classesCache);
 
-    // Injection dans l'état des KPIs (Figé sur la dernière connexion réussie)
+    // Injection propre et étanche dans l'état des KPIs
     setRawEleves({
       inscriptions: inscriptionsCache, 
       paiements: paiementsCache,       
@@ -191,13 +262,12 @@ export default function DashboardPage() {
       classes: classesCache.length,     
     });
 
-    console.log(`🔒 Cache School verrouillé : ${classesCache.length} classe(s) officielle(s) chargée(s).`);
+    console.log(`🔒 Cache School cloisonné pour l'UID ${uid} : ${classesCache.length} classe(s) chargée(s).`);
 
   } catch (e) {
     console.error("Erreur lors de la lecture du cache School sur le Dashboard :", e);
   }
 };
-
 
 
 
@@ -356,7 +426,7 @@ useEffect(() => {
   return () => window.removeEventListener("online", handleOnlineSync);
 }, [userId, currentAnnee]);
 
-  // ==========================================
+    // ==========================================
   // ⚡ ORCHESTRATION DU DASHBOARD (FAST FALLBACK)
   // ==========================================
   useEffect(() => {
@@ -365,14 +435,32 @@ useEffect(() => {
       let services: string[] = [];
 
       try {
-        const utilisateursLocaux = await db["utilisateurs"].limit(1).toArray();
-        if (utilisateursLocaux && utilisateursLocaux.length > 0) {
-          activeUid = utilisateursLocaux[0].id;
-          services = utilisateursLocaux[0].services_choisis || [];
-          
-          setUserId(activeUid!);
+        // 🎯 CORRECTION CIBLÉE : On cherche l'utilisateur actif (est_connecte: 1)
+        // au lieu de prendre aveuglément le premier de la liste (limit(1))
+        const dbCast = db as any;
+        const utilisateurActif = await dbCast.utilisateurs
+          .where("est_connecte")
+          .equals(1)
+          .first();
+
+        // Fallback de sécurité : si aucun n'est marqué actif (premier démarrage), 
+        // on reprend l'ancien comportement de secours pour ne pas bloquer l'UI
+        if (utilisateurActif) {
+          activeUid = utilisateurActif.id;
+          services = utilisateurActif.services_choisis || [];
+        } else {
+          const utilisateursLocaux = await dbCast.utilisateurs.limit(1).toArray();
+          if (utilisateursLocaux && utilisateursLocaux.length > 0) {
+            activeUid = utilisateursLocaux[0].id;
+            services = utilisateursLocaux[0].services_choisis || [];
+          }
+        }
+
+        // Application de vos états d'origine inchangés
+        if (activeUid) {
+          setUserId(activeUid);
           setActiveServices(services);
-          await calculerKpisLocaux(activeUid!, services);
+          await calculerKpisLocaux(activeUid, services);
         }
       } catch (err) {
         console.log("Erreur lecture initiale Dexie Dashboard", err);
@@ -406,7 +494,7 @@ useEffect(() => {
     }
 
     buildSmartDashboard();
-  }, []); // ✅ Le premier useEffect se ferme proprement ICI.
+  }, []); // ✅ Reste inchangé, se ferme proprement ici
 
   // ==========================================
   // 📊 CALCUL ET AGREGATION DES COMPTEURS (DEXIE/CLOUD)

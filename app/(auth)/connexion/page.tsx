@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 
 import { useState } from "react";
 import Link from "next/link";
+import { db } from "../../lib/db"; // Ajustez le chemin vers votre fichier db.ts
 import { supabase } from "../../utils/supabase";
 
 export default function ConnexionPage() {
@@ -48,7 +49,7 @@ export default function ConnexionPage() {
     }
   };
 
-  // --- ÉTAPE 2 : Validation du code OTP par Supabase ---
+    // --- ÉTAPE 2 : Validation du code OTP par Supabase ---
   const handleOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -68,6 +69,36 @@ export default function ConnexionPage() {
       });
 
       if (error) throw error;
+
+      // 🌟 INTEGRATION DEXIE SANS CHANGER VOTRE LOGIQUE SUPABASE
+      // 1. Récupération immédiate de la session qui vient d'être validée
+      const { data: sessionData } = await supabase.auth.getSession();
+      
+      if (sessionData?.session?.user) {
+        const uid = sessionData.session.user.id;
+        const dbCast = db as any;
+
+        // 2. Désactive toutes les autres sessions d'utilisateurs en local
+        await dbCast.utilisateurs.toCollection().modify({ est_connecte: 0 });
+
+        // 3. Récupère les métadonnées de l'entreprise depuis le Cloud
+        const { data: userData } = await supabase
+          .from("utilisateurs")
+          .select("nom_entreprise, services_choisis, adresse, telephone")
+          .eq("id", uid)
+          .maybeSingle();
+
+        // 4. Enregistre ou met à jour cet utilisateur précis en tant que SEUL actif (1)
+        await dbCast.utilisateurs.put({
+          id: uid,
+          email: email,
+          nom_entreprise: userData?.nom_entreprise || "Entreprise",
+          services_choisis: userData?.services_choisis || null,
+          adresse: userData?.adresse || "",
+          telephone: userData?.telephone || "",
+          est_connecte: 1 // 🎯 Seul cet utilisateur s'ouvrira en mode déconnecté
+        });
+      }
 
       // Connexion réussie : Redirection vers le dashboard d'entreprise
       window.location.href = "/dashboard";
@@ -110,6 +141,7 @@ export default function ConnexionPage() {
       setLoading(false);
     }
   };
+
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-white via-slate-50 to-white dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 flex items-center justify-center px-4 py-8">

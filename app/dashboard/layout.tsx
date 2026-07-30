@@ -135,24 +135,35 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     return () => clearInterval(interval);
   }, [router]);
 
-  // 4. EFFET 1 : CHARGEMENT PROFIL ET SERVICES (Une seule fois au démarrage)
+   // 4. EFFET 1 : CHARGEMENT PROFIL ET SERVICES (Une seule fois au démarrage)
   useEffect(() => {
     async function fetchUserServicesAndHydrate() {
+      // ==========================================
+      // 📴 CAS 1 : L'UTILISATEUR EST HORS-LIGNE
+      // ==========================================
       if (!navigator.onLine) {
-        const localUser = await db.utilisateurs.limit(1).toArray();
-        if (localUser && localUser.length > 0) {
-          setActiveServices(localUser[0].services_choisis || []);
-          setServicesCharges(localUser[0].services_choisis || []);
-          setNomEntreprise(localUser[0].nom_entreprise || "Entreprise Locale");
+        // 🎯 FIX : On cherche le profil marqué comme actif, fini le .limit(1) aveugle !
+        const dbCast = db as any;
+        const utilisateurActif = await dbCast.utilisateurs
+          .where("est_connecte")
+          .equals(1)
+          .first();
+
+        if (utilisateurActif) {
+          setActiveServices(utilisateurActif.services_choisis || []);
+          setServicesCharges(utilisateurActif.services_choisis || []);
+          setNomEntreprise(utilisateurActif.nom_entreprise || "Entreprise Locale");
         }
         setLoading(false);
         return;
       }
 
+      // ==========================================
+      // 🌐 CAS 2 : L'UTILISATEUR EST EN LIGNE
+      // ==========================================
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) {
-          // Si on est sur l'écran de connexion ou d'inscription, ne pas rediriger en boucle
           if (pathname !== "/connexion" && pathname !== "/inscription") {
             router.push("/connexion");
           }
@@ -168,7 +179,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
         const { data: userData } = await supabase
           .from("utilisateurs")
-          .select("services_choisis, nom_entreprise")
+          .select("services_choisis, nom_entreprise, adresse, telephone")
           .eq("id", user.id)
           .single();
       
@@ -178,15 +189,25 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             setServicesCharges(userData.services_choisis);
           }
           setNomEntreprise(userData.nom_entreprise || "Entreprise");
-          // Sauvegarde locale de secours pour le prochain démarrage hors-ligne
-          await db.utilisateurs.put({
+          
+          // 🔄 FIX MULTI-COMPTE EN LIGNE :
+          const dbCast = db as any;
+          // 1. Désactive toutes les autres sessions locales
+          await dbCast.utilisateurs.toCollection().modify({ est_connecte: 0 });
+
+          // 2. Sauvegarde locale de secours en verrouillant cet utilisateur précis à 1
+          await dbCast.utilisateurs.put({
             id: user.id,
+            email: user.email,
             services_choisis: userData.services_choisis || [],
-            nom_entreprise: userData.nom_entreprise || "Entreprise"
+            nom_entreprise: userData.nom_entreprise || "Entreprise",
+            adresse: userData.adresse || "",
+            telephone: userData.telephone || "",
+            est_connecte: 1 // 🎯 Devient l'unique utilisateur actif pour le mode offline
           });
         }
       } catch (e) {
-        console.error(e);
+        console.error("Erreur d'hydratation Layout :", e);
       } finally {
         setLoading(false);
       }
@@ -194,6 +215,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
     fetchUserServicesAndHydrate();
   }, [router, pathname]);
+
 
   // 5. EFFET 2 : SÉCURITÉ DE ROUTAGE PAR URL (Zéro appel réseau, résout le crash de redirection)
   useEffect(() => {
@@ -276,27 +298,53 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     router.push("/connexion");
   };
 
-  // Écran de chargement de l'hydratation (Aspiration de données)
+     // =========================================================================
+  // ÉCRANS DE CHARGEMENT AMÉLIORÉS : STYLE "LASER CYBER" (SHIMMER BAR)
+  // =========================================================================
+
+    // Écran 1 : L'hydratation (Aspiration initiale des données)
   if (loadingSync) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-100 p-6">
-        <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <h2 className="text-xl font-bold">Préparation de votre espace hors-ligne...</h2>
-        <p className="text-sm text-slate-400 mt-2 text-center max-w-sm">
+        <h2 className="text-xl font-black tracking-wider bg-gradient-to-r from-emerald-400 via-cyan-400 to-indigo-400 bg-clip-text text-transparent mb-2">
+          GreenItCar
+        </h2>
+        
+        {/* Rail de guidage */}
+        <div className="w-56 h-1 bg-slate-800 rounded-full overflow-hidden relative mb-6">
+          {/* 🌟 LE LASER : Largeur réduite à 1/3, fond émeraude de base pour forcer le hue-rotate */}
+          <div className="absolute top-0 h-full w-1/3 bg-gradient-to-r from-emerald-500 to-cyan-400 shadow-[0_0_8px_#10b981] animate-magic-laser" />
+        </div>
+        
+        <h3 className="text-md font-bold text-slate-200">Préparation de votre espace hors-ligne...</h3>
+        <p className="text-xs text-slate-400 mt-2 text-center max-w-sm leading-relaxed">
           Nous configurons la base de données de votre PC pour vous permettre de travailler de manière sécurisée en cas de délestage.
         </p>
       </div>
     );
   }
 
+  // Écran 2 : Le chargement d'initialisation classique de la suite
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white gap-3">
-        <div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-        <p className="text-sm text-slate-400 font-medium">Chargement de votre Suite personnalisée...</p>
+        <h2 className="text-lg font-black tracking-wider bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
+          GreenItCar
+        </h2>
+        
+        {/* Rail de guidage */}
+        <div className="w-48 h-1 bg-slate-800 rounded-full overflow-hidden relative">
+          {/* 🌟 LE LASER : Largeur réduite à 1/3, fond émeraude de base pour forcer le hue-rotate */}
+          <div className="absolute top-0 h-full w-1/3 bg-gradient-to-r from-emerald-500 to-cyan-400 shadow-[0_0_8px_#10b981] animate-magic-laser" />
+        </div>
+        
+        <p className="text-xs text-slate-500 font-medium tracking-wide animate-pulse">
+          Chargement de votre Suite personnalisée...
+        </p>
       </div>
     );
   }
+
 
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex text-slate-900 dark:text-slate-100">

@@ -214,128 +214,143 @@ const currentForm = new FormData(target);
     try {
             switch (currentModule) {
 
-               case "facture": {
-          tableName = "gf_factures"; 
-          
-          const factureId = crypto.randomUUID();
-          const totalHtCalculé = Number(getFormVal("total_ht")) || 0;
-          const quantiteVendue = Number(getFormVal("quantite")) || 1;
-          const prodId = getFormVal("produit_id");
+case "facture": {
+  tableName = "gf_factures"; 
+  
+  const prodId = getFormVal("produit_id");
+  const totalHtCalculé = Number(getFormVal("total_ht")) || 0;
+  const quantiteVendue = Number(getFormVal("quantite")) || 1;
+  const clientNom = getFormVal("client_nom", "Client Comptant");
 
-          // Calcul de la marge brute automatique
-          const produitConcerne = articlesCatalogue.find((p: any) => String(p.id) === String(prodId));
-          const prixAchatUnitaire = produitConcerne ? Number(produitConcerne.prix_achat) : 0;
-          const beneficeRealise = totalHtCalculé - (prixAchatUnitaire * quantiteVendue);
+  // 🌟 SÉCURITÉ : Validation stricte des données de la facture
+  if (!prodId || prodId === "" || totalHtCalculé <= 0 || quantiteVendue <= 0) {
+    throw new Error("⚠️ Veuillez sélectionner un produit valide et entrer un montant/quantité corrects.");
+  }
 
-          // Payload de la facture
-          const finalFactureData = {
-            id: factureId,
-            utilisateur_id: userId,
-            client_nom: getFormVal("client_nom", "Client Comptant"),
-            total_ttc: totalHtCalculé,
-            total_ht: totalHtCalculé,
-            benefice_realise: beneficeRealise,
-            statut: getFormVal("statut", "payee"),
-            cree_le: new Date().toISOString(),
-            statut_synchro: "local"
-          };
+  const factureId = crypto.randomUUID();
 
-          // Payload de l'item de facture
-          const localItemData = {
-            id: crypto.randomUUID(),
-            utilisateur_id: userId,
-            facture_id: factureId,
-            produit_id: prodId,
-            quantite: quantiteVendue,
-            prix_unitaire: Number(getFormVal("prix_unitaire")) || 0,
-            statut_synchro: "local"
-          };
+  // Calcul de la marge brute automatique
+  const produitConcerne = articlesCatalogue.find((p: any) => String(p.id) === String(prodId));
+  const prixAchatUnitaire = produitConcerne ? Number(produitConcerne.prix_achat) : 0;
+  const beneficeRealise = totalHtCalculé - (prixAchatUnitaire * quantiteVendue);
 
-          if (!db[tableName] || !db["gf_facture_items"]) {
-            throw new Error(`La table ${tableName} ou gf_facture_items n'est pas configurée dans Dexie.`);
-          }
+  // Payload de la facture
+  const finalFactureData = {
+    id: factureId,
+    utilisateur_id: userId,
+    client_nom: clientNom,
+    total_ttc: totalHtCalculé,
+    total_ht: totalHtCalculé,
+    benefice_realise: beneficeRealise,
+    statut: getFormVal("statut", "payee"),
+    cree_le: new Date().toISOString(),
+    statut_synchro: "local"
+  };
 
-          // 1. ÉCRITURE STRICTEMENT LOCALE (Comme stock et school)
+  // Payload de l'item de facture
+  const localItemData = {
+    id: crypto.randomUUID(),
+    utilisateur_id: userId,
+    facture_id: factureId,
+    produit_id: prodId,
+    quantite: quantiteVendue,
+    prix_unitaire: Number(getFormVal("prix_unitaire")) || 0,
+    statut_synchro: "local"
+  };
+
+  if (!db[tableName] || !db["gf_facture_items"]) {
+    throw new Error(`La table ${tableName} ou gf_facture_items n'est pas configurée dans Dexie.`);
+  }
+
+  // 1. ÉCRITURE STRICTEMENT LOCALE
+  await Promise.all([
+    db[tableName].put(finalFactureData),
+    db["gf_facture_items"].put(localItemData)
+  ]);
+
+  // 2. MISE À JOUR DU STOCK & ALERTE (En local)
+  if (produitConcerne) {
+    const stockActuel = Number(produitConcerne.stock_actuel) || 0;
+    const nouveauStock = stockActuel - quantiteVendue;
+    const seuilAlerte = Number(produitConcerne.stock_alerte) || 0;
+
+    // Décrémentation en base locale
+    await db["gf_produits"].update(prodId, { stock_actuel: nouveauStock });
+
+    // Notification UI instantanée pour le catalogue actuel
+    setArticlesCatalogue((prev) =>
+      (prev || []).map((art) =>
+        String(art.id) === String(prodId) ? { ...art, stock_actuel: nouveauStock } : art
+      )
+    );
+
+    // Alerte native
+    if (nouveauStock <= seuilAlerte) {
+      alert(`⚠️ ALERTE STOCK : "${produitConcerne.nom}" est bas (${nouveauStock} restants pour un seuil de ${seuilAlerte}).`);
+    }
+  }
+
+  // 3. SYNCHRONISATION SUPABASE EN ARRIÈRE-PLAN
+  if (navigator.onLine) {
+    (async () => {
+      try {
+        const { statut_synchro, cree_le, ...factureCloudBase } = finalFactureData;
+        const { statut_synchro: _, ...itemCloud } = localItemData;
+
+        const factureCloud = { ...factureCloudBase, created_at: cree_le };
+
+        const resFacture = await supabase.from("gf_factures").insert(factureCloud);
+        const resItem = await supabase.from("gf_facture_items").insert(itemCloud);
+
+        if (!resFacture.error && !resItem.error) {
           await Promise.all([
-            db[tableName].put(finalFactureData),
-            db["gf_facture_items"].put(localItemData)
+            db[tableName].update(factureId, { statut_synchro: "synchronise" }),
+            db["gf_facture_items"].update(localItemData.id, { statut_synchro: "synchronise" })
           ]);
-
-          // 2. MISE À JOUR DU STOCK & ALERTE (En local)
-          if (produitConcerne) {
-            const stockActuel = Number(produitConcerne.stock_actuel) || 0;
-            const nouveauStock = stockActuel - quantiteVendue;
-            const seuilAlerte = Number(produitConcerne.stock_alerte) || 0;
-
-            // Décrémentation en base locale
-            await db["gf_produits"].update(prodId, { stock_actuel: nouveauStock });
-
-            // Notification UI instantanée pour le catalogue actuel
-            setArticlesCatalogue((prev) =>
-              (prev || []).map((art) =>
-                String(art.id) === String(prodId) ? { ...art, stock_actuel: nouveauStock } : art
-              )
-            );
-
-            // Alerte native
-            if (nouveauStock <= seuilAlerte) {
-              alert(`⚠️ ALERTE STOCK : "${produitConcerne.nom}" est bas (${nouveauStock} restants pour un seuil de ${seuilAlerte}).`);
-            }
-          }
-
-          // 3. SYNCHRONISATION SUPABASE EN ARRIÈRE-PLAN (Sans bloquer ni crasher l'UI)
-          if (navigator.onLine) {
-            (async () => {
-              try {
-                const { statut_synchro, cree_le, ...factureCloudBase } = finalFactureData;
-                const { statut_synchro: _, ...itemCloud } = localItemData;
-
-                const factureCloud = { ...factureCloudBase, created_at: cree_le };
-
-                const resFacture = await supabase.from("gf_factures").insert(factureCloud);
-                const resItem = await supabase.from("gf_facture_items").insert(itemCloud);
-
-                if (!resFacture.error && !resItem.error) {
-                  await Promise.all([
-                    db[tableName].update(factureId, { statut_synchro: "synchronise" }),
-                    db["gf_facture_items"].update(localItemData.id, { statut_synchro: "synchronise" })
-                  ]);
-                  console.log("✅ Facture synchronisée en tâche de fond !");
-                }
-              } catch (e) {
-                console.error("Échec de la synchro silencieuse", e);
-              }
-            })();
-          }
-
-          break;
+          console.log("✅ Facture synchronisée en tâche de fond !");
         }
+      } catch (e) {
+        console.error("Échec de la synchro silencieuse", e);
+      }
+    })();
+  }
 
+  break;
+}
 
-        case "stock": {
-          tableName = "gf_produits";
-          const quantiteInitiale = Number(getFormVal("stock_actuel")) || 0;
-          
-          const finalStockData = {
-            id: crypto.randomUUID(), // 🔥 Remplacement du nombre par un UUID String
-            utilisateur_id: userId,
-            nom: getFormVal("nom_produit") || getFormVal("nom"),
-            prix_achat: Number(getFormVal("prix_achat")) || 0,
-            prix_vente: Number(getFormVal("prix_vente")) || 0,
-            stock_initial: quantiteInitiale, 
-            stock_actuel: quantiteInitiale,
-            stock_alerte: Number(getFormVal("stock_alerte")) || 5,
-            unite_mesure: getFormVal("unite_mesure", "Sac"),
-            statut_synchro: "local"
-          };
+case "stock": {
+  tableName = "gf_produits";
+  
+  const nomProduit = getFormVal("nom_produit") || getFormVal("nom");
+  const prixVente = Number(getFormVal("prix_vente")) || 0;
+  const quantiteInitiale = Number(getFormVal("stock_actuel")) || 0;
 
-          if (!db[tableName]) {
-            throw new Error(`La table ${tableName} n'est pas configurée dans Dexie.`);
-          }
+  // 🌟 SÉCURITÉ : Validation stricte des données du produit
+  if (!nomProduit || nomProduit === "" || prixVente <= 0) {
+    throw new Error("⚠️ Le nom du produit et le prix de vente sont obligatoires et doivent être valides.");
+  }
+  
+  const finalStockData = {
+    id: crypto.randomUUID(), 
+    utilisateur_id: userId,
+    nom: nomProduit,
+    prix_achat: Number(getFormVal("prix_achat")) || 0,
+    prix_vente: prixVente,
+    stock_initial: quantiteInitiale, 
+    stock_actuel: quantiteInitiale,
+    stock_alerte: Number(getFormVal("stock_alerte")) || 5,
+    unite_mesure: getFormVal("unite_mesure", "Sac"),
+    statut_synchro: "local"
+  };
 
-          await db[tableName].put(finalStockData);
-          break;
-        }
+  if (!db[tableName]) {
+    throw new Error(`La table ${tableName} n'est pas configurée dans Dexie.`);
+  }
+
+  await db[tableName].put(finalStockData);
+  break;
+}
+
 
         case "school": {
           const eleveIdNum = idNumeriqueUnique();
@@ -383,96 +398,107 @@ const currentForm = new FormData(target);
           break;
         }
 
-         case "school_paiement": {
+     case "school_paiement": {
         const montantVerse = Number(getFormVal("montant")) || Number(getFormVal("montant_paiement")) || 0;
-        const inscriptionIdChoisie = Number(getFormVal("inscription_id"));
+        const inscriptionIdChoisie = getFormVal("inscription_id").trim();
 
-        if (montantVerse <= 0 || !inscriptionIdChoisie) {
+        // 🌟 FIX : On utilise "throw new Error" pour envoyer l'erreur directement au bloc catch
+        if (montantVerse <= 0 || !inscriptionIdChoisie || inscriptionIdChoisie === "") {
           throw new Error("Le montant du paiement ou l'élève sélectionné est invalide.");
         }
+
+        const idFinalPourDb = isNaN(Number(inscriptionIdChoisie)) 
+          ? inscriptionIdChoisie 
+          : Number(inscriptionIdChoisie);
 
         const nouveauPaiementSeul = {
           id: idNumeriqueUnique(),
           utilisateur_id: userId,
-          inscription_id: inscriptionIdChoisie,
+          inscription_id: idFinalPourDb,
           montant: montantVerse,
           date_paiement: getFormVal("date_paiement") || new Date().toISOString().split("T")[0],
           mode_paiement: getFormVal("mode_paiement", "Espèces"),
-          statut_synchro: "local" // Stockage en cache d'abord
+          reference: getFormVal("reference") || null,
+          statut_synchro: "local"
         };
 
-        // Sauvegarde immédiate dans la table Dexie locale
         await db.gs_paiements.put(nouveauPaiementSeul);
         break;
       }
 
       case "school_enseignant": {
-  const nomRaw = getFormVal("nom_enseignant") || getFormVal("nom");
-  const prenomRaw = getFormVal("prenom_enseignant") || getFormVal("prenom");
-  const telephoneRaw = getFormVal("telephone_enseignant");
-  const adresseRaw = getFormVal("adresse_enseignant");
+        const nomRaw = getFormVal("nom_enseignant") || getFormVal("nom");
+        const prenomRaw = getFormVal("prenom_enseignant") || getFormVal("prenom");
+        const telephoneRaw = getFormVal("telephone_enseignant");
+        const adresseRaw = getFormVal("adresse_enseignant");
 
-  if (!nomRaw || !prenomRaw || !telephoneRaw || !adresseRaw) {
-    setStatus({ type: "error", text: "⚠️ Veuillez remplir tous les champs obligatoires (*)." });
-    setSaving(false);
-    return;
-  }
+        // 🌟 FIX : Remplacement du "return;" par "throw new Error" pour éviter de bloquer l'état "saving"
+        if (!nomRaw || !prenomRaw || !telephoneRaw || !adresseRaw) {
+          throw new Error("⚠️ Veuillez remplir tous les champs obligatoires (*).");
+        }
 
-  
-  const specialiteFinale = formData.specialite
-    ? String(formData.specialite).trim() 
-    : null;
+        const specialiteFinale = formData.specialite
+          ? String(formData.specialite).trim() 
+          : null;
 
-  const nouvelEnseignant = {
-    id: idNumeriqueUnique(),
-    utilisateur_id: userId,
-    nom: nomRaw.toUpperCase(),
-    prenom: prenomRaw,
-    adresse: adresseRaw, 
-    telephone: telephoneRaw, 
-    email: getFormVal("email_enseignant") || null,
-    specialite: specialiteFinale, 
-    statut_synchro: "local"
-  };
+        const nouvelEnseignant = {
+          id: idNumeriqueUnique(),
+          utilisateur_id: userId,
+          nom: nomRaw.toUpperCase(),
+          prenom: prenomRaw,
+          adresse: adresseRaw, 
+          telephone: telephoneRaw, 
+          email: getFormVal("email_enseignant") || null,
+          specialite: specialiteFinale, 
+          statut_synchro: "local"
+        };
 
-  // Enregistrement local Dexie
-  await db.gs_enseignants.put(nouvelEnseignant);
-  break;
-}
-
-
+        await db.gs_enseignants.put(nouvelEnseignant);
+        break;
+      }
 
       default:
         console.warn("Aucun module correspondant trouvé pour la soumission.");
         break;
     }
 
+    // ==========================================
+    // 2. ACTIONS EN CAS DE SUCCÈS (Exécuté uniquement si aucune erreur n'a été levée)
+    // ==========================================
     setStatus({ type: "success", text: "Enregistrement local effectué avec succès !" });
     
-    // Réinitialisation du formulaire
+    // Réinitialisation globale du formulaire HTML
     target.reset();
-    // 🧼 Nettoyage de l'état en contournant le blocage de type TypeScript
-setFormData((prev: any) => ({ 
-  ...prev, 
-  specialite: "" 
-}));
-
+    
+    // 🧼 Nettoyage complet des états de la page (Éléve, Recherche, Spécialité)
+    setSearchQuery("");
+    setIsOpen(false);
+    setFormData((prev: any) => ({ 
+      ...prev, 
+      inscription_id: "",
+      reste_a_payer_max: "",
+      specialite: "" 
+    }));
 
     // ==========================================
-    // 🚀 FIX 2 : SYNCHRONISATION INSTANTANÉE VERS SUPABASE (SI ONLINE)
+    // 🚀 SYNCHRONISATION INSTANTANÉE VERS SUPABASE (SI ONLINE)
     // ==========================================
     if (typeof window !== "undefined" && navigator.onLine) {
-      console.log("🌐 Internet actif : Envoi immédiat des paiements et inscriptions vers Supabase...");
-      
-      // Appel de votre orchestrateur unifié que nous avons stabilisé ensemble
+      console.log("🌐 Internet actif : Envoi immédiat vers Supabase...");
       const currentAnneeId = getFormVal("annee_id") || "1";
       await executionSynchronisationGlobale(userId, currentAnneeId);
     }
 
   } catch (err: any) {
+    // ==========================================
+    // 3. GESTION CENTRALISÉE DES ERREURS
+    // ==========================================
     console.error("Erreur de soumission :", err);
     setStatus({ type: "error", text: err.message || "Erreur lors de l'enregistrement." });
   } finally {
+    // ==========================================
+    // 4. NETTOYAGE TOUJOURS EXÉCUTÉ (Libère le bouton de validation)
+    // ==========================================
     setSaving(false);
   }
 };
@@ -1200,22 +1226,28 @@ return (
               <div className="relative mb-4">
                 <label className="block text-sm font-semibold mb-2">Sélectionner l'élève *</label>
                 
+                {/* 💡 AJOUT : Ce champ invisible stocke l'ID technique pour le handleSubmit */}
+                <input 
+                  type="hidden" 
+                  name="inscription_id" 
+                  value={formData.inscription_id || ""} 
+                />
+
                 {/* Champ texte cliquable qui sert de filtre */}
                 <input
                   type="text"
                   placeholder="Nom, prénom, matricule..."
+                  id="recherche_eleve" // Ajout d'un ID pour éviter les conflits de soumission
                   value={searchQuery}
                   onChange={(e) => {
                     const valeur = e.target.value;
                     setSearchQuery(valeur);
-                    // CORRECTION : On n'ouvre la liste QUE s'il y a plus de 1 caractère tapé
                     if (valeur.trim().length >= 2) {
                       setIsOpen(true);
                     } else {
                       setIsOpen(false);
                     }
                   }}
-                  // CORRECTION UX : Au focus, on n'ouvre plus la liste automatiquement si c'est vide
                   onFocus={() => {
                     if (searchQuery.trim().length >= 2) {
                       setIsOpen(true);
@@ -1223,6 +1255,7 @@ return (
                   }}
                   className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
+
 
                 {/* Liste déroulante flottante (ne s'affiche que si isOpen est vrai ET qu'on a saisi assez de lettres) */}
                 {isOpen && searchQuery.trim().length >= 2 && (
