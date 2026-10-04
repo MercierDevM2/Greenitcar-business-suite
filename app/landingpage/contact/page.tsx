@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 export default function ContactPage() {
   const router = useRouter();
  // 1. Déclaration propre des coordonnées de base
-const whatsappNumber = "212680775822"; // Vérifiez bien qu'il n'y a pas de "0" en trop entre 212 et le 6
+const whatsappNumber = "23670051025"; // Vérifiez bien qu'il n'y a pas de "0" en trop entre 212 et le 6
 const phoneNumber = "+23672584161";    
 const emailAddress = "greenitcar@gmail.com";
 const physicalAddress = "PK11 Bangui, RCA";
